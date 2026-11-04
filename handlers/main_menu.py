@@ -144,21 +144,20 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         return
 
     if data == "pf:delphoto":
-        db.update_user(uid, avatar_file_id=None)
-        await q.answer("عکس حذف شد ✅")
-        await show_profile_cb(q, uid)
+        # عکس اجباری است؛ حذف کامل مجاز نیست (کیبوردهای قدیمی)
+        await q.answer("حذف کامل عکس ممکن نیست؛ می‌توانی عکس را عوض کنی 🖼")
         return
 
     if data.startswith("pf:edit:"):
         field = data.split(":")[2]
         ctx = {"edit": field}
         if field == "photo":
-            from keyboards import skip_photo_kb
             db.set_state(uid, config.ST_REG_PHOTO, ctx)
             await q.answer()
             await q.message.reply_text(
-                "🖼 عکس جدید را بفرست (برای رد کردن، دکمه رد را بزن):",
-                reply_markup=skip_photo_kb())
+                "🖼 عکس جدید را بفرست (عکس پروفایل اجباری است و هر وقت بخواهی "
+                "می‌توانی عوضش کنی):",
+                reply_markup=remove_kb)
             return
         if field == "gender":
             from keyboards import gender_kb

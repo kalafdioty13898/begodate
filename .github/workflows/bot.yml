@@ -1,15 +1,15 @@
-# بگودیت — اجرای واقعی ربات روی GitHub Actions (Polling)
+# بگودیت — اجرای واقعی ربات روی GitHub Actions (Polling) + Snapshot هفته اول
 #
 # الگوی اجرا:
 #   • هر ۶ ساعت یک اجرای تازه شروع می‌شود و اجرای قبلی لغو می‌شود
 #     (concurrency + cancel → هرگز دو instance هم‌زمان Polling نمی‌کنند → بدون Conflict)
 #   • timeout هر اجرا ۳۵۰ دقیقه است؛ یعنی قبل از شروع اجرای بعدی تمام می‌شود
-#   • با push شدن همین فایل، اجرا بلافاصله شروع می‌شود (راه‌اندازی اولیه)
-#   • با workflow_dispatch هم می‌توان دستی اجرا کرد
+#   • ربات هنگام خاموشی (شامل لغو) Snapshot را می‌بندد و همین Job آن را به
+#     مخزن کامیت می‌کند تا داده‌های هفته‌ی اول بین ری‌استارت‌ها حفظ شود
 #
-# توجه: تست‌ها در ci.yml جدا هستند؛ اینجا تست‌ها به‌عنوان «دروازه» قبل از اجرا می‌آیند
-# تا اگر کدی خراب بود، ربات اصلاً استارت نخورد.
-# مقادیر حساس فقط از GitHub Secrets می‌آیند و هیچ‌وقت در لاگ چاپ نمی‌شوند.
+# توجه مهم: مخزن عمومی است — فایل snapshot حاوی رکورد کاربران است و پس از
+# merge به main عمومی می‌شود. به‌محض انتقال به هاست واقعی، این بخش را
+# غیرفعال کنید (SNAPSHOT_ENABLED=false) و فایل را از مخزن حذف کنید.
 
 name: Bagoodit Bot
 
@@ -22,7 +22,7 @@ on:
     paths: [".github/workflows/bot.yml"]
 
 permissions:
-  contents: read
+  contents: write   # برای کامیت Snapshot هفته اول
 
 concurrency:
   group: bagoodit-bot-polling
@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -55,8 +57,15 @@ jobs:
           python -m compileall -q .
           python tests/test_province_city.py
           python tests/test_audit_suite.py
+          python tests/test_v2_suite.py
 
-      - name: Start bot (Polling)
+      - name: Pull latest snapshot (آخرین داده‌ها)
+        run: |
+          git config user.name "bagoodit-snapshot"
+          git config user.email "actions@users.noreply.github.com"
+          git pull --rebase -X ours origin main || true
+
+      - name: Start bot + save snapshot on exit
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
@@ -65,5 +74,20 @@ jobs:
           LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
           TEST_MODE_ENABLED: ${{ secrets.TEST_MODE_ENABLED }}
         run: |
-          echo "Starting Bagoodit polling — this step stays alive until the next scheduled run (~6h) or cancel."
+          echo "Starting Bagoodit polling — stays alive until next scheduled run (~6h) or cancel."
           python bot.py
+          EXIT_CODE=$?
+          echo "Bot exited (code=$EXIT_CODE) — committing week-1 JSON snapshot…"
+          if [ -f data/snapshot.json ]; then
+            git add data/snapshot.json
+            if git diff --cached --quiet; then
+              echo "No snapshot changes."
+            else
+              git commit -m "chore: هفته اول — ذخیره Snapshot داده‌ها [skip ci]"
+              git pull --rebase -X ours origin main || true
+              git push origin main || echo "snapshot push failed (will retry next cycle)"
+            fi
+          else
+            echo "No snapshot file (bot may have failed to start)."
+          fi
+          exit $EXIT_CODE

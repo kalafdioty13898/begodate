@@ -105,6 +105,25 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    msg_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    sender_id  INTEGER NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'text',
+    body       TEXT,
+    tg_msg_id  INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cm_chat ON chat_messages(chat_id, msg_id);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    audit_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id   INTEGER NOT NULL,
+    action     TEXT NOT NULL,
+    details    TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -123,6 +142,7 @@ def init() -> None:
     _conn.execute("PRAGMA busy_timeout=5000")
     _conn.executescript(SCHEMA)
     _conn.commit()
+    migrate()
 
 
 # ---------------- پایه ----------------
@@ -212,19 +232,87 @@ def is_registered(user) -> bool:
                 and user["province"] and user["city"])
 
 
+def _free_bot_id_ranges(gender: str):
+    """فضای شناسه: اول ۵ رقمی، در اشباع ۶ رقمی (همان پیشوند ۵ برای دختر / ۴ برای پسر)."""
+    if gender == "F":
+        return [(50000, 59999), (500000, 599999)]
+    return [(40000, 49999), (400000, 499999)]
+
+
 def gen_bot_user_id(gender: str) -> str:
-    """شناسه ناشناس: user5XXXX برای دختر، user4XXXX برای پسر (یکتا)."""
-    lo, hi = (50000, 59999) if gender == "F" else (40000, 49999)
-    for _ in range(200):
-        n = random.randint(lo, hi)
-        bot_id = f"user{n}"
-        if not q1("SELECT 1 FROM users WHERE bot_user_id=?", (bot_id,)):
-            return bot_id
-    for n in range(lo, hi + 1):  # فضای کامل در حالت فشار
-        bot_id = f"user{n}"
-        if not q1("SELECT 1 FROM users WHERE bot_user_id=?", (bot_id,)):
-            return bot_id
+    """شناسه ناشناس یکتا: با ۵ شروع می‌شود برای دختر، با ۴ برای پسر؛
+    مستقل از telegram_id و غیرقابل حدس. پس از Restart تغییر نمی‌کند."""
+    for lo, hi in _free_bot_id_ranges(gender):
+        for _ in range(200):
+            n = random.randint(lo, hi)
+            bot_id = f"user{n}"
+            if not q1("SELECT 1 FROM users WHERE bot_user_id=?", (bot_id,)):
+                return bot_id
+        for n in range(lo, hi + 1):  # فضای کامل در حالت فشار
+            bot_id = f"user{n}"
+            if not q1("SELECT 1 FROM users WHERE bot_user_id=?", (bot_id,)):
+                return bot_id
     raise RuntimeError("bot_user_id space exhausted")
+
+
+def assign_missing_bot_ids() -> int:
+    """Migration امن: به هر کاربر فاقد شناسه، شناسه یکتا با پیشوند جنسیت می‌دهد.
+    شناسه‌های معتبر قبلی دست‌نخورده می‌مانند؛ کاربران نیمه‌ثبت‌نام (بدون جنسیت)
+    در پایان ثبت‌نام شناسه می‌گیرند. خروجی: تعداد اختصاص‌یافته‌ها."""
+    rows = q("SELECT telegram_id, gender FROM users "
+             "WHERE (bot_user_id IS NULL OR bot_user_id='') "
+             "AND gender IN ('F','M')")
+    n = 0
+    for r in rows:
+        try:
+            bid = gen_bot_user_id(r["gender"])
+        except RuntimeError:
+            break
+        x("UPDATE users SET bot_user_id=? WHERE telegram_id=? AND "
+          "(bot_user_id IS NULL OR bot_user_id='')", (bid, r["telegram_id"]))
+        n += 1
+    return n
+
+
+def fix_duplicate_bot_ids() -> int:
+    """اگر به هر دلیل bot_user_id تکراری وجود داشته باشد، به جز اولینِ هر گروه
+    شناسه جدید یکتا داده می‌شود. خروجی: تعداد اصلاح‌شده‌ها."""
+    dups = q("SELECT bot_user_id, COUNT(*) AS c FROM users "
+             "WHERE bot_user_id IS NOT NULL AND bot_user_id!='' "
+             "GROUP BY bot_user_id HAVING c>1")
+    fixed = 0
+    for d in dups:
+        rows = q("SELECT telegram_id, gender FROM users WHERE bot_user_id=? "
+                 "ORDER BY telegram_id", (d["bot_user_id"],))
+        for r in rows[1:]:
+            g = r["gender"] if r["gender"] in ("F", "M") else "M"
+            try:
+                bid = gen_bot_user_id(g)
+            except RuntimeError:
+                return fixed
+            x("UPDATE users SET bot_user_id=? WHERE telegram_id=?",
+              (bid, r["telegram_id"]))
+            fixed += 1
+    return fixed
+
+
+def migrate() -> dict:
+    """Migrationهای سبک و idempotent هنگام هر استارت (هیچ داده‌ای حذف نمی‌شود)."""
+    stats = {"ids_assigned": assign_missing_bot_ids(),
+             "ids_fixed": fix_duplicate_bot_ids(),
+             "messages_pruned": prune_chat_messages(30)}
+    if stats["ids_assigned"] or stats["ids_fixed"]:
+        import logging
+        logging.getLogger("bagoodit.db").info(
+            "migration: %s ids assigned, %s fixed",
+            stats["ids_assigned"], stats["ids_fixed"])
+    return stats
+
+
+def users_without_bot_id() -> int:
+    return q1("SELECT COUNT(*) AS c FROM users WHERE "
+              "(bot_user_id IS NULL OR bot_user_id='') "
+              "AND nickname IS NOT NULL AND gender IS NOT NULL")["c"]
 
 
 def list_state(state: str) -> list:
@@ -373,6 +461,36 @@ def user_chats(uid: int, limit=10) -> list:
 
 def active_chats_list() -> list:
     return q("SELECT * FROM chats WHERE state='ACTIVE' ORDER BY chat_id DESC")
+
+
+# ---------------- پیام‌های چت (فقط برای رسیدگی به گزارش‌ها) ----------------
+def add_chat_message(chat_id: int, sender_id: int, kind: str, body=None,
+                     tg_msg_id=None) -> None:
+    x("INSERT INTO chat_messages (chat_id, sender_id, kind, body, tg_msg_id, created_at) "
+      "VALUES (?,?,?,?,?,?)",
+      (chat_id, sender_id, kind, body, tg_msg_id, now_iso()))
+
+
+def chat_messages(chat_id: int, limit=50) -> list:
+    return q("SELECT * FROM chat_messages WHERE chat_id=? ORDER BY msg_id DESC LIMIT ?",
+             (chat_id, limit))
+
+
+def prune_chat_messages(days: int) -> int:
+    """حذف پیام‌های قدیمی‌تر از «days» روز — حداقل‌داشتنِ داده برای حریم خصوصی."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds")
+    return x("DELETE FROM chat_messages WHERE created_at<?", (cutoff,))
+
+
+# ---------------- Audit Log ----------------
+def audit(admin_id: int, action: str, details: str = "") -> None:
+    x("INSERT INTO audit_log (admin_id, action, details, created_at) VALUES (?,?,?,?)",
+      (admin_id, action, details, now_iso()))
+
+
+def recent_audit(limit=30) -> list:
+    return q("SELECT * FROM audit_log ORDER BY audit_id DESC LIMIT ?", (limit,))
 
 
 # ---------------- تاریخچه تطبیق ----------------

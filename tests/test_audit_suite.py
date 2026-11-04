@@ -102,7 +102,9 @@ async def register(uid: int, gender="F", age="25", prov="تهران", city="ری
     await send_text(uid, prov)
     await send_text(uid, city)
     await send_text(uid, nick)
-    await send_text(uid, BTN_SKIP_PHOTO)
+    # عکس اجباری — بدون عکس ثبت‌نام کامل نمی‌شود (قانون جدید)
+    photo_msg = FakeMessage(photo=[fake_photo(f"ava-{uid}")])
+    await common.route_media(FakeUpdate(uid, photo_msg), CTX)
 
 
 def reset_flows() -> None:
@@ -335,11 +337,22 @@ async def t09_profile():
     uid = new_uid()
     await register(uid, "F", "22", "قم", "قم", "نیلوفر")
     m = await send_text(uid, "👤 پروفایل من")
-    check("کارت پروفایل نمایش داده شود", "نیلوفر" in last_text(m)
-          and "user5" in last_text(m))
+    caps = [p.text or "" for p in CTX.bot.photos]
+    check("کارت پروفایل نمایش داده شود",
+          ("نیلوفر" in last_text(m) and "user5" in last_text(m))
+          or any("نیلوفر" in c and "user5" in c for c in caps))
     await tap(uid, "pf:edit:nickname")
-    await send_text(uid, "نیلوفر۲")
-    check("تغییر نام ذخیره شود", user_row(uid)["nickname"] == "نیلوفر۲")
+    await send_text(uid, "نیلوفر آبی")
+    check("تغییر نام ذخیره شود", user_row(uid)["nickname"] == "نیلوفر آبی")
+    await tap(uid, "pf:edit:nickname")
+    m_en = await send_text(uid, "Niloofar2")
+    check("نام انگلیسی رد شود (قانون نام فارسی)",
+          user_row(uid)["nickname"] == "نیلوفر آبی"
+          and "فقط فارسی" in last_text(m_en))
+    await tap(uid, "pf:edit:nickname")
+    m_fa_num = await send_text(uid, "نیلوفر۲")
+    check("نام با عدد رد شود", user_row(uid)["nickname"] == "نیلوفر آبی")
+    _ = m_fa_num
     await tap(uid, "pf:edit:age")
     await send_text(uid, "26")
     check("تغییر سن ذخیره شود", user_row(uid)["age"] == 26)
@@ -359,8 +372,8 @@ async def t10_random_match():
     print("T10) تطبیق شانسی + صف + تاریخچه")
     reset_flows()
     a, b = new_uid(), new_uid()
-    await register(a, "F", "25", "البرز", "کرج", "آوا۱")
-    await register(b, "M", "27", "البرز", "کرج", "آرش۱")
+    await register(a, "F", "25", "البرز", "کرج", "آوای شب")
+    await register(b, "M", "27", "البرز", "کرج", "آرش مهر")
     await send_text(a, "💬 چت ناشناس")
     await send_text(a, "🟢 چت تصادفی")
     check("کاربر اول در صف باشد", user_row(a)["state"] == config.ST_SEARCHING)
@@ -382,9 +395,9 @@ async def t11_gender_match():
     print("T11) جست‌وجوی جنسیتی — ناسازگار جفت نمی‌شود")
     reset_flows()
     m1, m2, f1 = new_uid(), new_uid(), new_uid()
-    await register(m1, "M", "28", "اصفهان", "اصفهان", "پسر۱")
-    await register(m2, "M", "29", "اصفهان", "اصفهان", "پسر۲")
-    await register(f1, "F", "24", "اصفهان", "اصفهان", "دختر۱")
+    await register(m1, "M", "28", "اصفهان", "اصفهان", "پسر اول")
+    await register(m2, "M", "29", "اصفهان", "اصفهان", "پسر دوم")
+    await register(f1, "F", "24", "اصفهان", "اصفهان", "دختر اول")
     for u in (m1, m2, f1):
         await send_text(u, "💬 چت ناشناس")
     S.set_value("coin_girl", "1")
@@ -400,10 +413,13 @@ async def t11_gender_match():
     check("پسر دوم همچنان در صف باشد", user_row(m2)["state"] == config.ST_SEARCHING)
     check("هزینه جست‌وجو از موجودی کم شود",
           db.get_balance(f1) == config.WELCOME_COINS - S.get_int("coin_boy"))
+    # قانون جدید: لغو عمدی کاربر = بدون بازگشت سکه
+    bal_before_cancel = db.get_balance(m2)
     await send_text(m2, "❌ لغو جستجو")
-    check("لغو جستجو سکه را برمی‌گرداند",
+    check("لغو جستجو بدون بازگشت سکه (قانون جدید)",
           user_row(m2)["state"] == config.ST_MAIN
-          and db.get_balance(m2) == config.WELCOME_COINS)
+          and db.get_balance(m2) == bal_before_cancel,
+          f"bal={db.get_balance(m2)} want={bal_before_cancel}")
 
 
 # ================= ۱۲) افراد نزدیک =================
@@ -411,9 +427,9 @@ async def t12_nearby():
     print("T12) جست‌وجوی اطراف — هم‌استانی جفت، غیرهم‌استانی نه")
     reset_flows()
     u1, u2, u3 = new_uid(), new_uid(), new_uid()
-    await register(u1, "F", "25", "مازندران", "ساری", "شمالی۱")
-    await register(u2, "M", "26", "مازندران", "بابل", "شمالی۲")
-    await register(u3, "M", "30", "فارس", "شیراز", "جنوبی۱")
+    await register(u1, "F", "25", "مازندران", "ساری", "شمالی یک")
+    await register(u2, "M", "26", "مازندران", "بابل", "شمالی دو")
+    await register(u3, "M", "30", "فارس", "شیراز", "جنوبی یک")
     for u in (u1, u2, u3):
         await send_text(u, "💬 چت ناشناس")
     await send_text(u1, "🔴 افراد نزدیک")
@@ -462,8 +478,8 @@ async def t14_race_condition():
     reset_flows()
     target, a, b = new_uid(), new_uid(), new_uid()
     await register(target, "F", "25", "یزد", "یزد", "هدف")
-    await register(a, "M", "27", "یزد", "یزد", "نخ۱")
-    await register(b, "M", "29", "یزد", "یزد", "نخ۲")
+    await register(a, "M", "27", "یزد", "یزد", "نخ اول")
+    await register(b, "M", "29", "یزد", "یزد", "نخ دوم")
     db.set_state(target, config.ST_SEARCHING,
                  {"search": {"kind": "random"}, "joined": db.now_iso()})
     cid1 = db.pair_users(a, target, "random")
@@ -501,7 +517,9 @@ async def t15_chat_flow():
     check("عکس به شریک منتقل شود", len(copied2) == 1)
     # دکمه پروفایل
     mp = await send_text(a, BTN_CHAT_PROFILE)
-    check("پروفایل طرف مقابل نمایش داده شود", "گیرنده" in last_text(mp))
+    profile_ok = "گیرنده" in last_text(mp) or any(
+        "گیرنده" in (p.text or "") for p in CTX.bot.photos[-2:])
+    check("پروفایل طرف مقابل نمایش داده شود", profile_ok)
     # گزارش
     mr = await send_text(a, BTN_CHAT_REPORT)
     check("منوی دلایل گزارش باز شود", len(markup_texts(last_markup(mr))) == 8)
@@ -511,10 +529,17 @@ async def t15_chat_flow():
     check("ادمین از گزارش باخبر شود",
           any(s.text and "گزارش جدید" in s.text for s in CTX.bot.sent))
 
-    # ---------- پایان چت ----------
+    # ---------- پایان چت (با تأیید دوم — قانون جدید) ----------
     print("T16) پایان چت برای هر دو طرف")
     n_reports = len(db.open_reports())
     await send_text(a, BTN_CHAT_END)
+    check("تأیید دوم پایان چت نمایش داده شود و چت باز بماند",
+          db.get_chat(chat["chat_id"])["state"] == "ACTIVE")
+    await tap(a, "chat:endno")
+    check("انصراف از پایان چت، چت را باز نگه دارد",
+          db.get_chat(chat["chat_id"])["state"] == "ACTIVE")
+    await send_text(a, BTN_CHAT_END)
+    await tap(a, "chat:endok")
     check("چت بسته شود", db.get_chat(chat["chat_id"])["state"] == "CLOSED")
     ra, rb = user_row(a), user_row(b)
     check("هر دو به منو برگردند", ra["state"] == config.ST_MAIN
@@ -754,8 +779,8 @@ async def t23_chat_request():
     db.close_chat(db.get_active_chat(a)["chat_id"], closer_id=None)
     # رد درخواست
     a2, b2 = new_uid(), new_uid()
-    await register(a2, "F", "25", "گیلان", "رشت", "درخواست۲")
-    await register(b2, "M", "27", "گیلان", "رشت", "گیرنده۲")
+    await register(a2, "F", "25", "گیلان", "رشت", "درخواست دوم")
+    await register(b2, "M", "27", "گیلان", "رشت", "گیرنده دوم")
     await tap(a2, f"usr:req:{b2}")
     rid2 = db.q1("SELECT request_id FROM chat_requests WHERE from_uid=? "
                  "ORDER BY request_id DESC", (a2,))["request_id"]
@@ -772,8 +797,8 @@ async def t24_telegram_errors():
     reset_flows()
     secure_settings()
     a, b = new_uid(), new_uid()
-    await register(a, "F", "25", "یزد", "یزد", "فرست۲")
-    await register(b, "M", "26", "یزد", "یزد", "گیر۲")
+    await register(a, "F", "25", "یزد", "یزد", "فرست دوم")
+    await register(b, "M", "26", "یزد", "یزد", "گیر دوم")
     await send_text(a, "💬 چت ناشناس")
     await send_text(a, "🟢 چت تصادفی")
     await send_text(b, "💬 چت ناشناس")
@@ -789,8 +814,8 @@ async def t24_telegram_errors():
           db.get_chat(chat["chat_id"])["state"] == "CLOSED"
           and any(s.text and "بلاک کرده" in s.text for s in CTX.bot.sent))
     a2, b2 = new_uid(), new_uid()
-    await register(a2, "F", "25", "یزد", "یزد", "فرست۳")
-    await register(b2, "M", "26", "یزد", "یزد", "گیر۳")
+    await register(a2, "F", "25", "یزد", "یزد", "فرست سوم")
+    await register(b2, "M", "26", "یزد", "یزد", "گیر سوم")
     await send_text(a2, "💬 چت ناشناس")
     await send_text(a2, "🟢 چت تصادفی")
     await send_text(b2, "💬 چت ناشناس")
@@ -839,7 +864,7 @@ async def t26_broadcast():
     real_targets = [new_uid() for _ in range(3)]
     for i, uid in enumerate(real_targets):
         db.ensure_user(uid)
-        db.update_user(uid, nickname=f"همگانی{i}",
+        db.update_user(uid, nickname=f"همگانی-{i}",
                        gender="M" if i % 2 else "F", age=25,
                        province="قم", city="قم")
     ctx = FakeContext()

@@ -80,9 +80,12 @@ def pair_compatible(u1: dict, c1: dict, u2: dict, c2: dict) -> bool:
 
 
 def find_real_partner(searcher: dict, criteria: dict):
-    """بهترین شریک واقعی در صف؛ امتیاز نزدیکی + تصادفی بین برابرها."""
+    """بهترین شریک واقعی در صف؛ اولویت با افراد غیرتکراریِ اخیر،
+    و اگر هیچ کاندیدای دیگری نبود، اجازه‌ی تطبیق مجدد (فالبک) تا هیچ‌وقت
+    دو گوشیِ تنها بی‌نتیجه نمانند."""
     cooldown = S.get_int("match_cooldown_minutes")
     candidates = []
+    stale = []  # کاندیداهای داخل دوره‌ی سرد
     for row in db.list_state(config.ST_SEARCHING):
         tid = row["telegram_id"]
         if tid == searcher["telegram_id"] or row["banned"]:
@@ -92,7 +95,8 @@ def find_real_partner(searcher: dict, criteria: dict):
         pc = criteria_from_ctx(db.get_ctx(row))
         if not pair_compatible(searcher, criteria, row, pc):
             continue
-        if db.was_recently_matched(searcher["telegram_id"], tid, cooldown):
+        if cooldown > 0 and db.was_recently_matched(searcher["telegram_id"], tid, cooldown):
+            stale.append((0, row))
             continue
         score = 0
         if criteria["kind"] == "nearby":
@@ -106,6 +110,8 @@ def find_real_partner(searcher: dict, criteria: dict):
             elif searcher["province"] == row["province"]:
                 score += 1
         candidates.append((score, row))
+    if not candidates:
+        candidates = stale  # فالبک: بهتر از ماندن بی‌نتیجه است
     if not candidates:
         return None
     top = max(c for c, _ in candidates)
@@ -137,7 +143,9 @@ def partner_brief(partner: dict, reveal_city=False, is_test=False) -> str:
 
 
 async def start_search(context, uid: int, kind: str, extra=None) -> None:
-    """شروع جست‌وجو با همه چک‌های امنیتی و اقتصادی."""
+    """شروع جست‌وجو با همه چک‌های امنیتی و اقتصادی.
+    هزینه فقط یک‌بار در ابتدا کم می‌شود؛ رقابت هم‌زمان با حلقه‌ی تلاش مجدد حل
+    می‌شود و کاربرِ بازنده یا مچ می‌شود یا به صف می‌رود — هرگز معلق نمی‌ماند."""
     bot = context.bot
     user = db.get_user(uid)
     if not user or user["banned"]:
@@ -166,54 +174,63 @@ async def start_search(context, uid: int, kind: str, extra=None) -> None:
             return
 
     criteria = build_criteria(kind, extra)
-    partner = None
-    is_test = False
-    real_first = S.get_bool("real_users_first")
+    reveal_city = kind in ("nearby", "filter")
+    from keyboards import chat_kb
 
-    real_p = find_real_partner(user, criteria)
-    test_p = find_test_partner(user, criteria) if real_p is None or not real_first else None
-    if not real_first and test_p is not None:
-        partner, is_test = test_p, True
-    elif real_p is not None:
-        partner = real_p
-    elif test_p is not None:
-        partner, is_test = test_p, True
+    # --- حلقه‌ی تلاش برای حل رقابت هم‌زمان (Race Condition) ---
+    # اگر بین «پیدا کردن شریک» و «جفت‌کردن اتمیک»، شریک توسط جست‌وجوگر دیگری
+    # گرفته شود، کاندیدای بعدی دوباره یافت می‌شود (حداکثر ۳ بار).
+    for _attempt in range(3):
+        partner = None
+        is_test = False
+        real_first = S.get_bool("real_users_first")
 
-    if partner is not None:
-        cap = random.randint(6, max(6, S.get_int("test_user_max_replies"))) if is_test else None
+        real_p = find_real_partner(user, criteria)
+        test_p = (find_test_partner(user, criteria)
+                  if real_p is None or not real_first else None)
+        if not real_first and test_p is not None:
+            partner, is_test = test_p, True
+        elif real_p is not None:
+            partner = real_p
+        elif test_p is not None:
+            partner, is_test = test_p, True
+
+        if partner is None:
+            break  # شریکی در صف نیست → صف انتظار
+
+        cap = (random.randint(6, max(6, S.get_int("test_user_max_replies")))
+               if is_test else None)
         cid = db.pair_users(uid, partner["telegram_id"], kind, b_is_test=is_test,
                             test_replies_cap=cap)
-        if cid is None:
-            coins.refund(uid, cost, kind)
-            await H.notify(bot, uid, "⏳ لحظه‌ای همه‌چیز پر شد؛ دوباره امتحان کن.")
+        if cid is not None:
+            # اطلاع‌رسانی به دو طرف
+            await H.notify(bot, uid, partner_brief(partner, reveal_city, is_test),
+                           reply_markup=chat_kb())
+            if not is_test:
+                await H.notify(bot, partner["telegram_id"],
+                               partner_brief(user, reveal_city, False),
+                               reply_markup=chat_kb())
+            else:
+                # پیام اول از طرف کاربر تستی + شمارنده
+                from services import auto_reply
+                db.bump_test_reply(cid)
+                db.set_last_reply(cid, "")
+                delay = random.uniform(S.get_float("test_reply_min_delay"),
+                                       S.get_float("test_reply_max_delay"))
+                context.job_queue.run_once(
+                    auto_reply.greeting_job, when=delay,
+                    data={"chat_id": cid, "test_uid": partner["telegram_id"],
+                          "real_uid": uid}, name=f"tgreet:{cid}")
             return
-        # اطلاع‌رسانی به دو طرف
-        reveal_city = kind in ("nearby", "filter")
-        from keyboards import chat_kb
-        await H.notify(bot, uid, partner_brief(partner, reveal_city, is_test),
-                       reply_markup=chat_kb())
-        if not is_test:
-            from keyboards import chat_kb as _ck
-            await H.notify(bot, partner["telegram_id"],
-                           partner_brief(user, reveal_city, False),
-                           reply_markup=_ck())
-        else:
-            # پیام اول از طرف کاربر تستی + شمارنده
-            from services import auto_reply
-            db.bump_test_reply(cid)
-            db.set_last_reply(cid, "")
-            delay = random.uniform(S.get_float("test_reply_min_delay"),
-                                   S.get_float("test_reply_max_delay"))
-            context.job_queue.run_once(
-                auto_reply.greeting_job, when=delay,
-                data={"chat_id": cid, "test_uid": partner["telegram_id"],
-                      "real_uid": uid}, name=f"tgreet:{cid}")
-        return
+        # pair_users رقابت را باطل کرد → وضعیت تازه گرفته شد و دوباره تلاش می‌کنیم
+        user = db.get_user(uid)
+        if not user or user["state"] == config.ST_CHAT:
+            return  # خودمان در چت دیگری افتادیم؛ کاری نکن
 
-    # هیچ شریکی نیست → صف انتظار
+    # پس از حلقه: یا شریک نبود یا همه‌ی تلاش‌ها به تصادم خورد → صف انتظار
     db.set_state(uid, config.ST_SEARCHING,
                  {"search": criteria, "joined": db.now_iso()})
-    cost_line = f"\n🪙 {cost} سکه بابت این جست‌وجو کم شد (لغو = بازگشت سکه)." if cost else ""
+    cost_line = f"\n🪙 {cost} سکه بابت این جست‌وجو کم شد." if cost else ""
     await H.notify(
         bot, uid,
         "📡 <b>وارد صف انتظار شدی...</b>\n"
@@ -228,20 +245,25 @@ def searching_kb_inline():
                                input_field_placeholder="در صف انتظار...")
 
 
-async def cancel_search(context, uid: int) -> bool:
+async def cancel_search(context, uid: int, refund=False, notify=True) -> bool:
+    """خروج از صف. قانون: لغو عمدی کاربر = بدون بازگشت سکه؛
+    خروج توسط مدیریت (refund=True) با حسابرسی مالی برگردانده می‌شود."""
     user = db.get_user(uid)
     if not user or user["state"] != config.ST_SEARCHING:
         return False
     criteria = criteria_from_ctx(db.get_ctx(user))
-    cost = cost_of(criteria.get("kind", "random"))
-    if cost > 0:
-        coins.refund(uid, cost, criteria.get("kind", "random"))
+    kind = criteria.get("kind", "random")
+    cost = cost_of(kind)
+    refund_note = ""
+    if refund and cost > 0:
+        coins.refund(uid, cost, kind)
+        refund_note = f"\n🪙 {cost} سکه به موجودی‌ات برگشت."
     db.set_state(uid, config.ST_MAIN)
-    from keyboards import main_menu_kb
-    refund_note = f"\n🪙 {cost} سکه به موجودی‌ات برگشت." if cost else ""
-    await H.notify(context.bot, uid,
-                   "❌ جست‌وجو لغو شد." + refund_note,
-                   reply_markup=main_menu_kb())
+    if notify:
+        from keyboards import main_menu_kb
+        await H.notify(context.bot, uid,
+                       "❌ جست‌وجو لغو شد." + refund_note,
+                       reply_markup=main_menu_kb())
     return True
 
 

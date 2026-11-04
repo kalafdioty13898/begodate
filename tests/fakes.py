@@ -15,6 +15,16 @@ class FakeMessage:
     def __init__(self, text=None, photo=None):
         self.text = text
         self.photo = photo
+        self.caption = None
+        self.video = None
+        self.video_note = None
+        self.voice = None
+        self.audio = None
+        self.sticker = None
+        self.animation = None
+        self.document = None
+        self.contact = None
+        self.location = None
         self.message_id = id(self) % 100000
         self.outbox = []
 

@@ -25,7 +25,7 @@ BTN_CHAT_PROFILE = "🟢 پروفایل طرف مقابل"
 BTN_CHAT_REPORT = "⚠️ گزارش کاربر"
 BTN_CHAT_END = "🔴 پایان چت"
 
-BTN_SKIP_PHOTO = "⏭ رد کردن عکس"
+BTN_SKIP_PHOTO = "⏭ رد کردن عکس"  # فقط برای تشخیص کیبوردهای قدیمی؛ دیگر نمایش داده نمی‌شود
 BTN_FEMALE = "👧 دختر"
 BTN_MALE = "👦 پسر"
 BTN_PROV_BACK = "⬅️ انتخاب مجدد استان"
@@ -64,15 +64,18 @@ def chat_kb() -> ReplyKeyboardMarkup:
         resize_keyboard=True, input_field_placeholder="پیامت را بنویس…")
 
 
+def chat_end_confirm_kb() -> InlineKeyboardMarkup:
+    """تأیید دوم پایان چت (جلوگیری از لمس اشتباهی) — خروج همیشه ممکن است."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ بله، پایان چت", callback_data="chat:endok"),
+        InlineKeyboardButton("❌ نه، ادامه می‌دهیم", callback_data="chat:endno")]])
+
+
 def age_kb() -> ReplyKeyboardMarkup:
     ages = [str(a) for a in range(config.AGE_MIN, config.AGE_MAX + 1)]
     return ReplyKeyboardMarkup(chunk(ages, 8), resize_keyboard=True,
                                one_time_keyboard=True,
                                input_field_placeholder="سن خود را انتخاب کن…")
-
-
-def skip_photo_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([[BTN_SKIP_PHOTO]], resize_keyboard=True)
 
 
 def provinces_reply_kb() -> ReplyKeyboardMarkup:
@@ -154,8 +157,7 @@ def profile_kb(has_avatar: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🚻 تغییر جنسیت", callback_data="pf:edit:gender"),
          InlineKeyboardButton("🏙 تغییر شهر", callback_data="pf:edit:city")],
         [InlineKeyboardButton("🖼 تغییر عکس", callback_data="pf:edit:photo"),
-         InlineKeyboardButton("🗑 حذف عکس", callback_data="pf:delphoto") if has_avatar
-         else InlineKeyboardButton("👤 پروفایل", callback_data="pf:noop")],
+         InlineKeyboardButton("👤 پروفایل", callback_data="pf:noop")],
         [InlineKeyboardButton("⬅️ بازگشت به منو", callback_data="pf:back")],
     ]
     return InlineKeyboardMarkup(rows)

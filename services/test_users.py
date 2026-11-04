@@ -28,17 +28,20 @@ HOBBIES = ["موسیقی", "فیلم و سریال", "کتاب‌خوانی", "�
 
 
 def _nickname(gender: str, i: int) -> str:
+    """نام مستعار فارسی — بدون هیچ حرف لاتین یا عدد (هم‌راستا با قانون نام فارسی)."""
     rng = random.Random(f"nick-{gender}-{i}")
     base = rng.choice(F_NAMES if gender == "F" else M_NAMES)
-    suffix = rng.choice(["", "", "", f"{rng.randint(2, 99)}", "_{c}".format(c=rng.choice("xyzkmt")),
-                         f"‌{rng.choice(HOBBIES)}"])
+    suffix = rng.choice(["", "", "", "", f"‌{rng.choice(HOBBIES)}",
+                         f" {rng.choice(HOBBIES)}"])
     nick = f"{base}{suffix}"
     return nick[:30]
 
 
 def generate_test_users(force=False) -> int:
-    """ساخت ۲۰ دختر + ۱۷ پسر برای هر شهر — idempotent و ضدتصادم."""
+    """ساخت کاربران تستی برای هر شهر (ظرفیت‌ها از تنظیمات ادمین) — idempotent و ضدتصادم."""
     import locations
+    f_per_city = S.get_int("test_users_per_city_f")
+    m_per_city = S.get_int("test_users_per_city_m")
     existing = db.q1("SELECT COUNT(*) AS c FROM users WHERE is_test_user=1")["c"]
     if existing > 0 and not force:
         return 0
@@ -73,8 +76,7 @@ def generate_test_users(force=False) -> int:
 
     for pidx, (prov, cities) in enumerate(locations.PROVINCES):
         for cidx, city in enumerate(cities):
-            for g, count in (("F", config.TEST_USERS_PER_CITY_F),
-                             ("M", config.TEST_USERS_PER_CITY_M)):
+            for g, count in (("F", f_per_city), ("M", m_per_city)):
                 for _ in range(count):
                     idx += 1
                     counter += 1

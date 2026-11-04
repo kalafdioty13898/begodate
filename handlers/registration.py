@@ -10,12 +10,12 @@ from telegram.ext import ContextTypes
 import config
 import database as db
 import locations
-from keyboards import (BTN_PROV_BACK, BTN_SKIP_PHOTO, age_kb, cities_reply_kb,
-                       gender_kb, main_menu_kb, provinces_reply_kb, remove_kb,
-                       skip_photo_kb)
+from keyboards import (BTN_PROV_BACK, age_kb, cities_reply_kb, gender_kb,
+                       main_menu_kb, provinces_reply_kb, remove_kb)
 from services import coins
 from services import settings as S
 from utils import helpers as H
+from utils.validators import NAME_FA_ERROR, validate_persian_name
 
 log = logging.getLogger("bagoodit.reg")
 
@@ -53,6 +53,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict,
         await update.message.reply_text(
             "👋 <b>سلام! دوباره برگشتی.</b>\nاز منوی زیر استفاده کن:",
             parse_mode="HTML", reply_markup=main_menu_kb())
+        return
+
+    # پروفایل کامل ولی بدون عکس (کاربران قدیمی) → فقط مرحله‌ی عکس تکمیل شود
+    if (user["nickname"] and user["gender"] and user["age"]
+            and user["province"] and user["city"] and not user["avatar_file_id"]):
+        db.set_state(uid, config.ST_REG_PHOTO, {})
+        await update.message.reply_text(
+            "🖼 برای فعال شدن کامل حساب، ارسال عکس اجباری شد؛ "
+            "لطفاً یک عکس برای پروفایلت بفرست.", reply_markup=remove_kb)
         return
 
     # شروع ثبت‌نام
@@ -133,10 +142,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     if state == config.ST_REG_NICKNAME:
-        nick = text.strip()
-        if not (config.NICK_MIN <= len(nick) <= config.NICK_MAX):
-            await update.message.reply_text(
-                f"اسم باید بین {config.NICK_MIN} تا {config.NICK_MAX} کاراکتر باشد.")
+        # قانون: نام مستعار فقط فارسی — اعتبارسنجی سمت سرور (نه فقط کیبورد)
+        ok, nick = validate_persian_name(text)
+        if not ok:
+            await update.message.reply_text(NAME_FA_ERROR)
             return
         db.update_user(uid, nickname=nick)
         if ctx.get("edit") == "nickname":
@@ -144,17 +153,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
         db.set_state(uid, config.ST_REG_PHOTO, {})
         await update.message.reply_text(
-            "🖼 قدم آخر — یک عکس برای پروفایلت بفرست (گرافیکی/کاریکاتور بهتر است؛ "
-            "عکس واقعی‌ات نمایش داده نمی‌شود مگر خودت بخواهی).\n"
-            "اگر عکس نداری، «⏭ رد کردن عکس» را بزن.",
-            reply_markup=skip_photo_kb())
+            "🖼 قدم آخر — یک عکس برای پروفایلت بفرست.\n"
+            "⚠️ بدون عکس، ثبت‌نام تکمیل نمی‌شود (گرافیکی/کاریکاتور بهتر است؛ "
+            "عکس واقعی‌ات نمایش داده نمی‌شود مگر خودت بخواهی).",
+            reply_markup=remove_kb)
         return
 
     if state == config.ST_REG_PHOTO:
-        if text == BTN_SKIP_PHOTO:
-            await _complete(update, context, uid)
-            return
-        await update.message.reply_text("عکس را بفرست یا «⏭ رد کردن عکس» را بزن.")
+        # عکس اجباری است؛ دکمه‌ی «رد کردن» دیگر وجود ندارد (کیبوردهای قدیمی هم نادیده گرفته می‌شوند)
+        await update.message.reply_text(
+            "⚠️ ارسال عکس اجباری است؛ لطفاً یک عکس (Photo) بفرست تا ثبت‌نام کامل شود.")
         return
 
     # حالت‌های دکمه‌ای
@@ -167,9 +175,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE,
     ctx = db.get_ctx(user)
     photo = update.message.photo
     if not photo:
-        await update.message.reply_text("فقط عکس قابل قبول است.")
+        await update.message.reply_text(
+            "⚠️ فقط عکس (Photo) قابل قبول است.\n"
+            "استیکر، ویدیو، ویس و فایل پذیرفته نمی‌شود؛ لطفاً یک عکس بفرست.")
         return
-    file_id = photo[-1].file_id
+    file_id = photo[-1].file_id  # بزرگ‌ترین سایز عکسِ همین کاربر ذخیره می‌شود
     db.update_user(uid, avatar_file_id=file_id)
     if ctx.get("edit") == "photo":
         await _finish_edit(update, context, uid)
@@ -275,6 +285,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
 # ---------------- تکمیل و ویرایش ----------------
 async def _complete(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: int) -> None:
     user = db.get_user(uid)
+    # گیت عکس اجباری: بدون عکس ثبت‌نام کامل نمی‌شود
+    if not user["avatar_file_id"]:
+        db.set_state(uid, config.ST_REG_PHOTO, {})
+        await update.effective_message.reply_text(
+            "⚠️ برای تکمیل ثبت‌نام، ارسال عکس اجباری است؛ لطفاً یک عکس بفرست.",
+            reply_markup=remove_kb)
+        return
     gender = user["gender"]
     if not user["bot_user_id"]:
         db.update_user(uid, bot_user_id=db.gen_bot_user_id(gender))

@@ -72,6 +72,20 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await main_menu.send_help(update, context)
 
 
+async def route_user_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """فرمت‌های «/user51234» و «user51234» — چون تلگرام شکل اسلش‌دار را «کامند»
+    می‌شناسد، هرگز به route_text نمی‌رسد؛ این هندلر اختصاصی آن را می‌گیرد."""
+    user = await _touch(update, context)
+    if user is None:
+        return
+    from handlers import search_user
+    if user["state"] in (config.ST_SEARCH_USER, config.ST_MAIN):
+        await search_user.handle_input(update, context, user)
+        return
+    await update.message.reply_text(
+        "برای جست‌وجوی کاربر، اول با /cancel به منو برگرد و «🔍 جستجوی کاربر» را بزن.")
+
+
 # ---------------- روتر پیام متنی ----------------
 async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _touch(update, context)
@@ -127,7 +141,7 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await feedback.handle_text(update, context, user)
         return
 
-    # جست‌وجوی کاربر با شناسه
+    # درخواست چت با شناسه
     if state == config.ST_SEARCH_USER:
         from handlers import search_user
         await search_user.handle_input(update, context, user)

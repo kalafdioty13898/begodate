@@ -78,6 +78,7 @@ class FakeMessage:
 class FakeBot:
     def __init__(self):
         self.sent = []
+        self.photos = []
 
     async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None, **kw):
         self.sent.append(Sent(text, reply_markup))
@@ -85,6 +86,7 @@ class FakeBot:
     async def send_photo(self, chat_id, photo, caption=None, parse_mode=None,
                          reply_markup=None, **kw):
         self.sent.append(Sent(caption, reply_markup, photo=photo))
+        self.photos.append(Sent(caption, reply_markup, photo=photo))
 
 
 class FakeCallbackQuery:
@@ -142,11 +144,14 @@ def new_uid() -> int:
 
 
 async def _register(uid: int, prov: str, city: str, nick: str):
+    from fakes import fake_photo
     await drive_to_province(uid)
     await send_text(uid, prov)
     await send_text(uid, city)
     await send_text(uid, nick)
-    await send_text(uid, "⏭ رد کردن عکس")
+    # عکس اجباری (قانون جدید) — بدون عکس ثبت‌نام کامل نمی‌شود
+    await common.route_media(
+        FakeUpdate(uid, FakeMessage(photo=[fake_photo(f"ava-{uid}")])), CTX)
 
 
 async def drive_to_province(uid: int, gender="F", age="25"):
@@ -326,13 +331,17 @@ async def t08_profile_edit_change_province():
     check("شهر جدید ذخیره و پروفایل نمایش داده شود",
           row["province"] == "اصفهان" and row["city"] == "کاشان"
           and row["state"] == config.ST_MAIN)
-    check("کارت پروفایل پس از ویرایش ارسال شود", "نیلا" in (m3.last.text or ""))
+    last_card = (m3.last.text if m3.last else "") or ""
+    caps = [p.text or "" for p in CTX.bot.photos]
+    check("کارت پروفایل پس از ویرایش ارسال شود",
+          "نیلا" in last_card or any("نیلا" in c for c in caps))
+    _ = caps  # نگه‌داشتن ارجاع برای خوانایی
 
 
 async def t09_profile_edit_same_province():
     print("T9) ویرایش شهر با همان استان قبلی")
     uid = new_uid()
-    await _register(uid, "گیلان", "رشت", "آرمان۲")
+    await _register(uid, "گیلان", "رشت", "آرمان دو")
     await tap(uid, "pf:edit:city")
     await send_text(uid, "گیلان")
     row = user_row(uid)

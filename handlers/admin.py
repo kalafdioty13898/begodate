@@ -43,6 +43,7 @@ def _panel_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton("📣 پیام همگانی", callback_data="adm:broadcast")],
         [InlineKeyboardButton("🧪 کاربران تستی", callback_data="adm:test"),
          InlineKeyboardButton("⚙️ تنظیمات", callback_data="adm:settings")],
+        [InlineKeyboardButton("🧾 Audit Log", callback_data="adm:audit")],
     ])
 
 
@@ -117,6 +118,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             return
         await ban_user(context, tid, admin_uid=uid)
         db.resolve_report(rid)
+        db.audit(uid, "ban_from_report", f"uid={tid},report={rid}")
         await q.answer("کاربر مسدود و پرونده بسته شد ✅")
         return
 
@@ -126,7 +128,20 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             await q.answer("نامعتبر!")
             return
         db.resolve_report(rid)
+        db.audit(uid, "report_resolve", f"report={rid}")
         await q.answer("پرونده بسته شد ✅")
+        return
+
+    # 👁 مشاهده مکالمه‌ی گزارش‌شده (فقط ادمین؛ ثبت در Audit Log)
+    if parts[1] == "crime" and len(parts) == 3 and parts[2].isdigit():
+        await q.answer()
+        await q.message.reply_text(_crime_text(int(parts[2]), uid),
+                                   parse_mode="HTML")
+        return
+
+    if data == "adm:audit":
+        await q.answer()
+        await q.message.reply_text(_audit_text(), parse_mode="HTML")
         return
 
     if data == "adm:refs":
@@ -214,6 +229,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
     if data == "adm:t_delyes":
         await q.answer("در حال حذف…")
         n = await asyncio.to_thread(db.delete_test_users)
+        db.audit(uid, "test_users_delete", f"count={n}")
         await q.message.reply_text(f"🗑 {n} کاربر تستی حذف شد.")
         return
 
@@ -282,6 +298,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             await q.answer("نامعتبر!")
             return
         await ban_user(context, tid, admin_uid=uid)
+        db.audit(uid, "ban", f"uid={tid}")
         await q.answer("مسدود شد 🚫")
         return
 
@@ -291,6 +308,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             await q.answer("نامعتبر!")
             return
         await unban_user(context, tid)
+        db.audit(uid, "unban", f"uid={tid}")
         await q.answer("رفع مسدودی ✅")
         return
 
@@ -473,10 +491,60 @@ def _report_actions_kb(rid: int) -> InlineKeyboardMarkup:
     r = db.get_report(rid)
     kb = []
     if r:
-        kb.append([InlineKeyboardButton("🚫 مسدودسازی متخلف", callback_data=f"adm:rban:{r['reported_id']}:{rid}")])
+        kb.append([InlineKeyboardButton("👁 مشاهده جرم", callback_data=f"adm:crime:{rid}"),
+                   InlineKeyboardButton("🚫 مسدودسازی متخلف", callback_data=f"adm:rban:{r['reported_id']}:{rid}")])
     kb.append([InlineKeyboardButton("✅ بستن پرونده", callback_data=f"adm:rdone:{rid}")])
     kb.append([InlineKeyboardButton("⬅️ گزارش‌ها", callback_data="adm:reports")])
     return InlineKeyboardMarkup(kb)
+
+
+def _crime_text(rid: int, admin_uid: int) -> str:
+    """نمایش محدود مکالمه‌ی مرتبط با گزارش — فقط برای ادمین، با ثبت در Audit Log.
+    هیچ آیدی تلگرام یا اطلاعات خصوصیِ غیرضروری نمایش داده نمی‌شود."""
+    r = db.get_report(rid)
+    if not r:
+        return "گزارش یافت نشد."
+    db.audit(admin_uid, "crime_view", f"report={rid},chat={r['chat_id']}")
+    rep = db.get_user(r["reporter_id"])
+    tgt = db.get_user(r["reported_id"])
+    lines = [f"👁 <b>مشاهده جرم — گزارش #{rid}</b>", "",
+             f"گزارش‌دهنده: {H.esc((rep or {}).get('nickname') or '—')} "
+             f"(<code>{(rep or {}).get('bot_user_id') or r['reporter_id']}</code>)",
+             f"گزارش‌شده: {H.esc((tgt or {}).get('nickname') or '—')} "
+             f"(<code>{(tgt or {}).get('bot_user_id') or r['reported_id']}</code>) | "
+             f"بن‌شده: {'بله' if (tgt or {}).get('banned') else 'نه'}",
+             f"دلیل: {H.esc(r['reason'])}",
+             f"زمان گزارش: {str(r['created_at'])[:16].replace('T', ' ')} | چت: #{r['chat_id']}",
+             ""]
+    if not r["chat_id"]:
+        lines.append("این گزارش به چت خاصی متصل نیست.")
+        return "\n".join(lines)
+    msgs = db.chat_messages(r["chat_id"], 30)
+    if not msgs:
+        lines.append("پیامی برای این چت ثبت نشده (متنی رد و بدل نشده یا "
+                     "قبل از فعال‌شدن ذخیره‌سازی بوده است).")
+        return "\n".join(lines)
+    lines.append(f"🗣 پیام‌های ثبت‌شده ({len(msgs)} پیام آخر؛ قدیمی → جدید):")
+    for m in reversed(msgs):
+        sender = db.get_user(m["sender_id"])
+        who = sender["bot_user_id"] if sender else f"uid{m['sender_id']}"
+        stamp = str(m["created_at"])[11:16]
+        body = (m["body"] or f"[{m['kind']}]").replace("\n", " ")[:200]
+        lines.append(f"<code>{stamp}</code> | {H.esc(str(who))}: {H.esc(body)}")
+    lines.append("")
+    lines.append("برای تصمیم: «🚫 مسدودسازی متخلف» یا «✅ بستن پرونده» در اعلان گزارش.")
+    return "\n".join(lines)
+
+
+def _audit_text() -> str:
+    rows = db.recent_audit(30)
+    if not rows:
+        return "🧾 Audit Log خالی است."
+    lines = ["🧾 <b>آخرین اقدامات مدیریت (Audit Log)</b>"]
+    for a in rows:
+        lines.append(f"• {str(a['created_at'])[:16].replace('T', ' ')} | "
+                     f"{H.esc(a['action'])} | {H.esc(a['details'] or '')}")
+    return "\n".join(lines)
 
 
 def _refs_text() -> str:
@@ -519,14 +587,36 @@ def _user_chats_text(tid: int) -> str:
 
 # ================= کاربر تستی =================
 def _test_text() -> str:
-    exp = (S.get("test_mode_expires_at") or "—")[:16].replace("T", " ")
+    exp_raw = (S.get("test_mode_expires_at") or "").strip()
     enabled = test_users.test_mode_active()
     c = test_users.test_counts()
     mode = "🟢 روشن" if enabled else "🔴 خاموش"
+    remaining = "—"
+    if exp_raw:
+        try:
+            from datetime import datetime, timezone
+            exp = datetime.fromisoformat(exp_raw)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            secs = (exp - datetime.now(timezone.utc)).total_seconds()
+            if secs <= 0:
+                remaining = "منقضی شده"
+            else:
+                h, m = int(secs // 3600), int((secs % 3600) // 60)
+                remaining = f"{h} ساعت و {m} دقیقه"
+        except (ValueError, TypeError):
+            pass
+    act = db.q1("SELECT COUNT(*) AS c FROM users WHERE is_test_user=1 "
+                "AND state!='IN_CHAT'")["c"]
+    busy = max(0, c["total"] - act)
     return ("🧪 <b>مدیریت کاربران تستی</b>\n\n"
             f"وضعیت تست‌مود: {mode}\n"
-            f"انقضا: {exp}\n"
-            f"تعداد کاربران تستی: {c['total']} (دختر: {c['female']} | پسر: {c['male']})\n"
+            f"زمان باقی‌مانده: {remaining}\n"
+            f"انقضا: {exp_raw[:16].replace('T', ' ') or '—'}\n"
+            f"تعداد کل: {c['total']} (دختر: {c['female']} | پسر: {c['male']})\n"
+            f"آزاد: {act} | مشغول (در چت): {busy}\n"
+            f"ظرفیت هر شهر: 👧 {S.get_int('test_users_per_city_f')} | "
+            f"👦 {S.get_int('test_users_per_city_m')}\n"
             f"اولویت کاربران واقعی: {'بله' if S.get_bool('real_users_first') else 'خیر'}")
 
 
@@ -755,6 +845,7 @@ async def _run_broadcast(context, admin_uid: int) -> None:
                 pass
     stopped = BC["stop"]
     BC["running"] = False
+    db.audit(admin_uid, "broadcast", f"sent={ok + fail}/{total},ok={ok},fail={fail},stopped={stopped}")
     try:
         await context.bot.edit_message_text(
             f"{'⏹ متوقف شد' if stopped else '✅ تمام شد'} | 📣 "
