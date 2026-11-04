@@ -246,8 +246,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception:
             pass
     try:
-        if isinstance(update, Update) and update.effective_message:
-            await update.effective_message.reply_text(
+        em = getattr(update, "effective_message", None)
+        if em is not None:
+            await em.reply_text(
                 "⚠️ خطایی پیش آمد؛ دوباره تلاش کن.")
     except Exception:
         pass

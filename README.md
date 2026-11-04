@@ -44,7 +44,9 @@ bagoodit/
 ├── seed_test_users.py      # ابزار ساخت کاربران تستی
 ├── requirements.txt
 ├── .env.example
-├── .github/workflows/bot.yml
+├── .github/workflows/ci.yml   # فقط اجرای تست‌ها (نه هاست ربات)
+├── tests/                     # test_province_city + test_audit_suite + fakes
+├── deploy/                    # bagoodit.service + راهنمای استقرار روی هاست
 ├── handlers/               # common، registration، main_menu، matching، chat،
 │   │                       # search_user، feedback، admin
 ├── keyboards/              # همه دکمه‌ها و کیبوردها
@@ -81,61 +83,59 @@ python seed_test_users.py --force  # بازسازی کامل
 
 ---
 
-## 🔐 GitHub Secrets
+## 🔐 متغیرهای محیطی (Secrets)
 
-در مخزن گیت‌هاب: `Settings → Secrets and variables → Actions`:
+در `.env` روی هاست (هرگز در گیت/کد). فهرست کامل با توضیح در `.env.example`:
 
-| Secret | مقدار |
-|---|---|
-| `BOT_TOKEN` | توکن BotFather |
-| `ADMIN_ID` | آیدی عددی ادمین |
-
----
-
-## ▶️ اجرا با GitHub Actions (رایگان، ولی دائمی نیست)
-
-1. پروژه را به یک مخزن گیت‌هاب push کن (`.env` در `.gitignore` است و کامیت نمی‌شود).
-2. دو Secret بالا را بساز.
-3. تب **Actions** → «Run Bagoodit Bot» → **Run workflow**.
-4. Job هر ۶ ساعت خودش دوباره بالا می‌آید؛ دیتابیس با cache بین اجراها حفظ می‌شود.
-
-> ⚠️ **صادقانه بگویم:** GitHub Actions یک سرور دائمی نیست؛ بین اجراها چند ثانیه توقف رخ می‌دهد
-> و گاهی cache می‌پرد. برای حرفه‌ای‌شدن، VPS بگیر (بخش بعدی).
+| متغیر | ضروری؟ | کاربرد |
+|---|---|---|
+| `BOT_TOKEN` | ✅ | توکن ربات از @BotFather |
+| `ADMIN_ID` | پیشنهادی | آیدی عددی ادمین (پنل مدیریت) |
+| `DB_PATH` | اختیاری | مسیر دیتابیس (پیش‌فرض `data/bagoodit.db`) |
+| `LOG_LEVEL` | اختیاری | سطح لاگ: DEBUG/INFO/WARNING/ERROR/CRITICAL |
+| `BOT_USERNAME` | اختیاری | در اجرا خودکار از getMe پر می‌شود |
+| `TEST_MODE_*` | اختیاری | تنظیمات کاربران تستی |
 
 ---
 
-## 🖥 مهاجرت به VPS (راه دائمی)
+## ▶️ اجرا
+
+ربات روی **هاست واقعی** اجرا می‌شود (بخش استقرار). GitHub Actions فقط برای تست است —
+نه هاست ۲۴/۷ (سقف اجرای Job، قطعی بین اجراها و خطر Conflict دو نمونه‌ای).
+
+---
+
+## ✅ تست‌ها و CI
+
+هر push/PR در گیت‌هاب به‌صورت خودکار این تست‌ها را اجرا می‌کند (Workflow «CI Tests»):
+
+```bash
+python -m compileall -q .            # سینتکس همه فایل‌ها
+python tests/test_province_city.py   # ثبت‌نام + ۳۱ استان + شهرها (۸۸ چک)
+python tests/test_audit_suite.py     # ممیزی کامل: چت، سکه، بن، همگانی، ریس و… (۱۱۵ چک)
+```
+
+اگر هر تستی شکست بخورد، Workflow هم Fail می‌شود. CI هرگز ربات را اجرا نمی‌کند
+(بدون توکن و بدون Polling) — پس هیچ Secret‌ای هم لازم ندارد.
+
+> ⚠️ ربات باید فقط در «یک جا» اجرا شود؛ اجرای همزمان دو نمونه، خطای
+> `Conflict: terminated by other getUpdates request` تلگرام را می‌دهد.
+
+---
+
+## 🖥 استقرار روی هاست واقعی (VPS)
+
+راهنمای کامل و فایل سرویس آماده در پوشه [`deploy/`](deploy/README.md) هست؛ خلاصه:
 
 ```bash
 # روی سرور اوبونتو
-git clone <repo> && cd bagoodit
-pip3 install -r requirements.txt
-nano .env                      # توکن و آیدی ادمین
-python3 seed_test_users.py     # اختیاری
-```
-
-سرویس systemd تا ربات با ری‌بوت سرور دوباره بالا بیاید:
-
-```ini
-# /etc/systemd/system/bagoodit.service
-[Unit]
-Description=Bagoodit Telegram Bot
-After=network-online.target
-
-[Service]
-WorkingDirectory=/root/bagoodit
-ExecStart=/usr/bin/python3 bot.py
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-systemctl enable --now bagoodit
-journalctl -u bagoodit -f      # مشاهده لاگ
+git clone <repo> /opt/bagoodit && cd /opt/bagoodit
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
+cp .env.example .env && nano .env        # BOT_TOKEN و ADMIN_ID
+venv/bin/python seed_test_users.py       # اختیاری
+cp deploy/bagoodit.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now bagoodit
+journalctl -u bagoodit -f                # مشاهده لاگ
 ```
 
 مهاجرت به PostgreSQL در آینده: فقط `database.py` را با درایور psycopg بازنویسی کن؛

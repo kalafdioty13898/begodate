@@ -113,12 +113,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         await q.answer()
         return
 
-    if parts[1] == "page" and len(parts) == 3:
+    if parts[1] == "page" and len(parts) == 3 and parts[2].isdigit():
         await q.answer()
         await q.message.edit_reply_markup(reply_markup=provinces_kb(int(parts[2]), prefix="fw"))
         return
 
-    if parts[1] == "cpage" and len(parts) == 4:
+    if parts[1] == "cpage" and len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
         await q.answer()
         await q.message.edit_reply_markup(
             reply_markup=cities_kb(int(parts[2]), int(parts[3]), prefix="fw"))
@@ -129,7 +129,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         await q.message.edit_reply_markup(reply_markup=provinces_kb(0, prefix="fw"))
         return
 
-    if parts[1] == "prov" and len(parts) == 3:
+    if parts[1] == "prov" and len(parts) == 3 and parts[2].isdigit():
         fw["pidx"] = int(parts[2])
         db.set_state(uid, config.ST_FILTER, {"fw": fw})
         await q.answer()
@@ -137,7 +137,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             reply_markup=cities_kb(int(parts[2]), 0, prefix="fw"))
         return
 
-    if parts[1] == "city" and len(parts) == 4:
+    if parts[1] == "city" and len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
         import locations
         res = locations.city_by_indices(int(parts[2]), int(parts[3]))
         if not res:

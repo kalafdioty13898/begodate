@@ -25,6 +25,9 @@ async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
         db.set_state(uid, config.ST_MAIN)
         await update.message.reply_text("لغو شد.", reply_markup=main_menu_kb())
         return
+    if not db.is_registered(user):
+        await update.message.reply_text("اول ثبت‌نام را کامل کن؛ /start را بزن.")
+        return
     if not USER_ID_RE.match(text):
         await update.message.reply_text(
             "فرمت درست نیست؛ مثل <code>user51234</code> بفرست.",
@@ -150,6 +153,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
 
     if parts[0] == "usr" and parts[1] == "req" and parts[2].lstrip("-").isdigit():
         tid = int(parts[2])
+        sender = db.get_user(uid)
+        if not sender or not db.is_registered(sender):  # گیت ثبت‌نام برای درخواست‌دهنده
+            await q.answer("اول ثبت‌نام را کامل کن!")
+            return
         target = db.get_user(tid)
         if not target or target["telegram_id"] == uid or target["banned"]:
             await q.answer("در دسترس نیست!")
@@ -162,7 +169,6 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             await q.answer("درخواست قبلی هنوز در انتظار است.")
             return
         await q.answer("درخواست ارسال شد ✅")
-        sender = db.get_user(uid)
         card = H.user_card(sender, show_contact_hint=True)
         if sender["avatar_file_id"]:
             try:

@@ -2,6 +2,7 @@
 همگانی (با کنترل سیل و توقف)، بازخورد، کاربران تستی، تنظیمات."""
 import asyncio
 import logging
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -21,6 +22,12 @@ BC = {"stop": False, "running": False}
 
 def _is_admin(uid: int) -> bool:
     return uid == config.ADMIN_ID
+
+
+def _to_int(s) -> int | None:
+    """تبدیل امن callback_data به int؛ ورودی غیرعددی (فورج‌شده) → None."""
+    s = str(s or "")
+    return int(s) if s.lstrip("-").isdigit() else None
 
 
 # ================= پنل =================
@@ -104,14 +111,21 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         return
 
     if parts[1] == "rban" and len(parts) == 4:
-        tid, rid = int(parts[2]), int(parts[3])
+        tid, rid = _to_int(parts[2]), _to_int(parts[3])
+        if tid is None or rid is None:
+            await q.answer("نامعتبر!")
+            return
         await ban_user(context, tid, admin_uid=uid)
         db.resolve_report(rid)
         await q.answer("کاربر مسدود و پرونده بسته شد ✅")
         return
 
     if parts[1] == "rdone" and len(parts) == 3:
-        db.resolve_report(int(parts[2]))
+        rid = _to_int(parts[2])
+        if rid is None:
+            await q.answer("نامعتبر!")
+            return
+        db.resolve_report(rid)
         await q.answer("پرونده بسته شد ✅")
         return
 
@@ -136,6 +150,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         return
 
     if data == "adm:bsend":
+        if BC["running"]:  # جلوگیری از اجرای همزمان دو ارسال همگانی
+            await q.answer("یک همگانی در حال اجراست!")
+            return
         await q.answer("شروع شد…")
         asyncio.create_task(_run_broadcast(context, uid))
         return
@@ -208,7 +225,6 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             await q.message.reply_text(
                 "⚠️ ساخت استخر آواتار ناموفق بود؛ اول با ربات /start کن تا ادمین شناخته شود.")
             return
-        S.set_value("avatar_pool", str(pool).replace("'", '"'))
         import json as _json
         S.set_value("avatar_pool", _json.dumps(pool, ensure_ascii=False))
         n = await asyncio.to_thread(db.assign_avatars_to_tests, pool)
@@ -234,15 +250,22 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         return
 
     if parts[1] == "qkick" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
         from services import matching as M
-        await M.cancel_search(context, int(parts[2]))
+        await M.cancel_search(context, tid)
         await q.answer("از صف خارج شد ✅")
         await q.message.reply_text(_queue_text(), parse_mode="HTML",
                                    reply_markup=_queue_kb())
         return
 
     if parts[1] == "cclose" and len(parts) == 3:
-        cid = int(parts[2])
+        cid = _to_int(parts[2])
+        if cid is None:
+            await q.answer("نامعتبر!")
+            return
         res = db.close_chat(cid, closer_id=uid)
         if res:
             for t in res:
@@ -254,40 +277,67 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
 
     # ---------- مدیریت کاربر ----------
     if parts[1] == "ban" and len(parts) == 3:
-        await ban_user(context, int(parts[2]), admin_uid=uid)
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        await ban_user(context, tid, admin_uid=uid)
         await q.answer("مسدود شد 🚫")
         return
 
     if parts[1] == "unban" and len(parts) == 3:
-        await unban_user(context, int(parts[2]))
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        await unban_user(context, tid)
         await q.answer("رفع مسدودی ✅")
         return
 
     if parts[1] == "addcoin" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
         await q.answer()
-        _start_coin(uid, int(parts[2]), "add")
+        _start_coin(uid, tid, "add")
         await q.message.reply_text("➕ مقدار سکه را بفرست (عدد):")
         return
 
     if parts[1] == "subcoin" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
         await q.answer()
-        _start_coin(uid, int(parts[2]), "sub")
+        _start_coin(uid, tid, "sub")
         await q.message.reply_text("➖ مقدار سکه را بفرست (عدد):")
         return
 
     if parts[1] == "msg" and len(parts) == 3:
-        db.set_state(uid, config.ST_ADMIN_MSG, {"msg_to": int(parts[2])})
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        db.set_state(uid, config.ST_ADMIN_MSG, {"msg_to": tid})
         await q.answer()
         await q.message.reply_text("📩 متن پیام برای این کاربر را بنویس:")
         return
 
     if parts[1] == "chatsu" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
         await q.answer()
-        await q.message.reply_text(_user_chats_text(int(parts[2])), parse_mode="HTML")
+        await q.message.reply_text(_user_chats_text(tid), parse_mode="HTML")
         return
 
     if parts[1] == "deltest" and len(parts) == 3:
-        tid = int(parts[2])
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
         await q.answer()
         await q.message.reply_text(
             "⚠️ این کاربر تستی حذف شود؟", parse_mode="HTML",
@@ -295,7 +345,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         return
 
     if parts[1] == "deltestyes" and len(parts) == 3:
-        tid = int(parts[2])
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        chat = db.get_active_chat(tid)
+        if chat:  # چت فعال شریک تستی بسته شود تا شریک واقعی رها نشود
+            db.close_chat(chat["chat_id"], closer_id=None)
         n = db.x("DELETE FROM users WHERE is_test_user=1 AND telegram_id=?", (tid,))
         await q.answer("حذف شد 🗑" if n else "یافت نشد!")
         return
@@ -588,10 +644,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 return
             S.set_value(key, "true" if v in ("true", "روشن") else "false")
         else:
-            if not text.isdigit():
+            # مقادیر صحیح و اعشاری (مثل تأخیر پاسخ تستی) پذیرفته می‌شوند
+            if not re.fullmatch(r"\d+(?:\.\d+)?", text):
                 await update.message.reply_text("فقط عدد بفرست:")
                 return
-            S.set_value(key, int(text))
+            val = float(text)
+            S.set_value(key, int(val) if val == int(val) else val)
         db.set_state(uid, config.ST_MAIN, {})
         await update.message.reply_text(f"✅ ثبت شد: {S.EDITABLE[key]} = {S.get(key)}")
         return

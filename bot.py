@@ -1,6 +1,7 @@
 """بگودیت — نقطه ورود ربات"""
 import asyncio
 import logging
+import os
 import sys
 
 from telegram import BotCommand
@@ -11,8 +12,11 @@ import config
 import database as db
 from handlers import admin, common
 
+_log_level = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()
+if _log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    _log_level = "INFO"
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level),
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bagoodit")

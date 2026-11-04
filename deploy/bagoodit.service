@@ -1,0 +1,19 @@
+[Unit]
+Description=Bagoodit Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bagoodit
+EnvironmentFile=/opt/bagoodit/.env
+ExecStart=/opt/bagoodit/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# سخت‌سازی پروسه
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
