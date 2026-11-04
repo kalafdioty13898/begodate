@@ -1,0 +1,69 @@
+# بگودیت — اجرای واقعی ربات روی GitHub Actions (Polling)
+#
+# الگوی اجرا:
+#   • هر ۶ ساعت یک اجرای تازه شروع می‌شود و اجرای قبلی لغو می‌شود
+#     (concurrency + cancel → هرگز دو instance هم‌زمان Polling نمی‌کنند → بدون Conflict)
+#   • timeout هر اجرا ۳۵۰ دقیقه است؛ یعنی قبل از شروع اجرای بعدی تمام می‌شود
+#   • با push شدن همین فایل، اجرا بلافاصله شروع می‌شود (راه‌اندازی اولیه)
+#   • با workflow_dispatch هم می‌توان دستی اجرا کرد
+#
+# توجه: تست‌ها در ci.yml جدا هستند؛ اینجا تست‌ها به‌عنوان «دروازه» قبل از اجرا می‌آیند
+# تا اگر کدی خراب بود، ربات اصلاً استارت نخورد.
+# مقادیر حساس فقط از GitHub Secrets می‌آیند و هیچ‌وقت در لاگ چاپ نمی‌شوند.
+
+name: Bagoodit Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"   # UTC: 00:00 / 06:00 / 12:00 / 18:00
+  push:
+    branches: [main]
+    paths: [".github/workflows/bot.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bagoodit-bot-polling
+  cancel-in-progress: true
+
+jobs:
+  run-bot:
+    name: Polling Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Gate — syntax + tests (دروازه‌ی اجرا)
+        run: |
+          python -m compileall -q .
+          python tests/test_province_city.py
+          python tests/test_audit_suite.py
+
+      - name: Start bot (Polling)
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          DB_PATH: ${{ secrets.DB_PATH }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+          TEST_MODE_ENABLED: ${{ secrets.TEST_MODE_ENABLED }}
+        run: |
+          echo "Starting Bagoodit polling — this step stays alive until the next scheduled run (~6h) or cancel."
+          python bot.py
