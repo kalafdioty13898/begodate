@@ -1,0 +1,23 @@
+# محیط و توکن‌ها — هرگز کامیت نشود
+.env
+
+# داده‌های محلی ربات
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# پایتون
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# سیستم‌عامل
+.DS_Store
+Thumbs.db
+
+# لاگ‌ها
+*.log
