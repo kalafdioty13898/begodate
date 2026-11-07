@@ -214,6 +214,16 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await feedback.on_cb(update, context, user)
             return
 
+        if data.startswith("nc:"):
+            from handlers import notifications
+            await notifications.on_cb(update, context, user)
+            return
+
+        if data.startswith("prv:"):
+            from handlers import privacy
+            await privacy.on_cb(update, context, user)
+            return
+
         if data.startswith("adm:"):
             from handlers import admin
             await admin.on_cb(update, context, user)

@@ -11,6 +11,8 @@ BTN_PROFILE = "👤 پروفایل من"
 BTN_COINS = "🪙 سکه‌های من"
 BTN_REFERRAL = "🎁 دعوت دوستان"
 BTN_FEEDBACK = "📝 بازخورد"
+BTN_NOTIFICATIONS = "🔔 اعلان‌ها"
+BTN_PRIVACY = "🔐 حریم خصوصی"
 BTN_HELP = "ℹ️ راهنما"
 
 BTN_MATCH_RANDOM = "🟢 چت تصادفی"
@@ -39,6 +41,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [[BTN_ANON_CHAT, BTN_SEARCH_USER],
          [BTN_PROFILE, BTN_COINS],
          [BTN_REFERRAL, BTN_FEEDBACK],
+         [BTN_NOTIFICATIONS, BTN_PRIVACY],
          [BTN_HELP]],
         resize_keyboard=True, input_field_placeholder="گزینه‌ای را انتخاب کن…")
 

@@ -37,6 +37,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict,
                     reward = S.get_int("referral_reward")
                     coins.earn(referrer_tid, reward, "referral")
                     cnt = db.referral_count(referrer_tid)
+                    from services import notifications as NF
+                    NF.ev_referral(referrer_tid, reward, cnt, uid)
                     await H.notify(
                         context.bot, referrer_tid,
                         f"🎁 <b>یک دوست با لینک تو به بگودیت اومد!</b>\n"

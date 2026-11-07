@@ -459,8 +459,13 @@ async def t14_existing_users_safe():
           before["province"] == after["province"] and before["city"] == after["city"]
           and before["nickname"] == after["nickname"])
     cols = [r["name"] for r in db.q("PRAGMA table_info(users)")]
-    check("اسکیمای دیتابیس تغییر نکرده باشد",
-          "province" in cols and "city" in cols and len(cols) == 16)
+    # اسکیمای اصلی حفظ شده + ستون privacy (مهاجرت افزوده‌شده در نسخه‌ی اعلان‌ها)
+    check("اسکیمای دیتابیس سالم باشد (ستون‌های اصلی + privacy افزوده)",
+          all(c in cols for c in ("telegram_id", "bot_user_id", "nickname", "gender",
+                                  "age", "province", "city", "coins", "state",
+                                  "context", "banned", "is_test_user", "referred_by",
+                                  "created_at", "last_active", "privacy"))
+          and len(cols) == 17)
 
 
 async def t15_matching_gate():

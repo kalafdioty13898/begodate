@@ -37,7 +37,7 @@ def _nickname(gender: str, i: int) -> str:
 
 
 def generate_test_users(force=False) -> int:
-    """ساخت ۲۰ دختر + ۱۷ پسر برای هر شهر — idempotent و ضدتصادم."""
+    """ساخت ۲۰ دختر + ۲۰ پسر برای هر شهر — idempotent و ضدتصادم."""
     import locations
     existing = db.q1("SELECT COUNT(*) AS c FROM users WHERE is_test_user=1")["c"]
     if existing > 0 and not force:

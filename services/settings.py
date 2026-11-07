@@ -19,9 +19,12 @@ DEFAULTS = {
     "test_user_max_replies": str(config.TEST_USER_MAX_REPLIES),
     "test_reply_min_delay": str(config.TEST_REPLY_MIN_DELAY),
     "test_reply_max_delay": str(config.TEST_REPLY_MAX_DELAY),
+    "digest_enabled": "true",
+    "digest_hour": "0",
 }
 
-BOOL_KEYS = {"real_users_first", "test_mode_enabled", "test_mode_manually_disabled"}
+BOOL_KEYS = {"real_users_first", "test_mode_enabled", "test_mode_manually_disabled",
+             "digest_enabled"}
 
 # فقط این کلیدها از پنل مدیریت قابل ویرایش‌اند
 EDITABLE = {
@@ -37,6 +40,8 @@ EDITABLE = {
     "test_reply_min_delay": "حداقل تأخیر پاسخ تستی (ثانیه)",
     "test_reply_max_delay": "حداکثر تأخیر پاسخ تستی (ثانیه)",
     "real_users_first": "اولویت کاربران واقعی (true/false)",
+    "digest_enabled": "خلاصه‌ی شبانه‌ی اعلان‌ها (true/false)",
+    "digest_hour": "ساعت خلاصه‌ی شبانه (0-23؛ پس از ری‌استارت)",
 }
 
 

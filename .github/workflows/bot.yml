@@ -55,6 +55,7 @@ jobs:
           python -m compileall -q .
           python tests/test_province_city.py
           python tests/test_audit_suite.py
+          python tests/test_notification_suite.py
 
       - name: Start bot (Polling)
         env:

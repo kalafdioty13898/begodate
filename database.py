@@ -105,6 +105,41 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    type        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    metadata    TEXT,
+    action_type TEXT,
+    action_data TEXT,
+    dedup_key   TEXT,
+    is_read     INTEGER NOT NULL DEFAULT 0,
+    read_at     TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_dedup
+    ON notifications(user_id, dedup_key) WHERE dedup_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, is_read);
+
+CREATE TABLE IF NOT EXISTS notification_digest_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    digest_date  TEXT NOT NULL,
+    unread_count INTEGER,
+    sent_at      TEXT NOT NULL,
+    UNIQUE(user_id, digest_date)
+);
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     TEXT NOT NULL,
+    kind   TEXT NOT NULL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_event_ts ON event_log(ts);
 """
 
 
@@ -122,7 +157,15 @@ def init() -> None:
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.execute("PRAGMA busy_timeout=5000")
     _conn.executescript(SCHEMA)
+    _migrate()
     _conn.commit()
+
+
+def _migrate() -> None:
+    """مهاجرت امن برای دیتابیس‌های قدیمی‌تر (فقط افزودن ستون؛ هیچ‌چیز حذف نمی‌شود)."""
+    cols = {r["name"] for r in q("PRAGMA table_info(users)")}
+    if "privacy" not in cols:
+        _conn.execute("ALTER TABLE users ADD COLUMN privacy TEXT NOT NULL DEFAULT '{}'")
 
 
 # ---------------- پایه ----------------
@@ -164,6 +207,15 @@ def ensure_user(tid: int) -> dict:
                 "INSERT INTO transactions (user_id, amount, reason, balance_after, created_at) "
                 "VALUES (?,?,?,?,?)",
                 (tid, config.WELCOME_COINS, "welcome", config.WELCOME_COINS, now_iso()))
+            # اعلان خوش‌آمدگویی (فقط یک‌بار، هم‌گام با ساخت حساب)
+            _conn.execute(
+                "INSERT INTO notifications (user_id, type, title, message, metadata, "
+                "action_type, action_data, dedup_key, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (tid, "welcome", "به بگودیت خوش اومدی 👋",
+                 "ثبت‌نامت کامل شد! هر اعلان مهم (درخواست چت، پاداش سکه، پاسخ پشتیبانی و…) "
+                 "همین‌جا برایت جمع می‌شود؛ هر شب هم اگر اعلان خوانده‌نشده داشته باشی بهت خبر می‌دهیم.",
+                 None, "profile", None, f"welcome:{tid}", now_iso()))
         _conn.commit()
     return get_user(tid)
 
@@ -548,3 +600,159 @@ def assign_avatars_to_tests(pool: list) -> int:
               (random.choice(src), u["telegram_id"]))
             n += 1
     return n
+
+
+# ---------------- اعلان‌ها (Notification Center) ----------------
+def add_notification(user_id: int, ntype: str, title: str, message: str,
+                     metadata=None, action_type=None, action_data=None,
+                     dedup_key=None) -> int | None:
+    """ثبت اعلان در دیتابیس. اگر dedup_key تکراری باشد None برمی‌گرداند
+    (جلوگیری از اعلان دوباره برای یک رویداد واحد).
+    کاربران تستی اعلان نمی‌گیرند (هیچ‌وقت مرکز اعلان را نمی‌بینند)."""
+    u = get_user(user_id)
+    if not u or u["is_test_user"]:
+        return None
+    md = json.dumps(metadata, ensure_ascii=False) if metadata else None
+    ad = json.dumps(action_data, ensure_ascii=False) if action_data else None
+    with _lock:
+        cur = _conn.execute(
+            "INSERT OR IGNORE INTO notifications (user_id, type, title, message, "
+            "metadata, action_type, action_data, dedup_key, is_read, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,'0',?)",
+            (user_id, ntype, title, message, md, action_type, ad, dedup_key, now_iso()))
+        _conn.commit()
+        return cur.lastrowid if cur.rowcount == 1 else None
+
+
+def get_notification(nid: int):
+    return q1("SELECT * FROM notifications WHERE id=?", (nid,))
+
+
+def unread_count(user_id: int) -> int:
+    row = q1("SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0",
+             (user_id,))
+    return row["c"] if row else 0
+
+
+def notif_count(user_id: int) -> int:
+    row = q1("SELECT COUNT(*) AS c FROM notifications WHERE user_id=?", (user_id,))
+    return row["c"] if row else 0
+
+
+def list_notifications(user_id: int, limit=8, offset=0) -> list:
+    """جدیدترین اول؛ هیچ اعلانی به‌خاطر گذشت روز حذف نمی‌شود."""
+    return q("SELECT * FROM notifications WHERE user_id=? "
+             "ORDER BY id DESC LIMIT ? OFFSET ?", (user_id, limit, offset))
+
+
+def mark_notification_read(nid: int, user_id: int) -> bool:
+    """فقط همین یک اعلانِ همین کاربر خوانده می‌شود — نه یکی دیگر، نه مال دیگری."""
+    return x("UPDATE notifications SET is_read=1, read_at=? "
+             "WHERE id=? AND user_id=? AND is_read=0",
+             (now_iso(), nid, user_id)) == 1
+
+
+def mark_all_notifications_read(user_id: int) -> int:
+    return x("UPDATE notifications SET is_read=1, read_at=? "
+             "WHERE user_id=? AND is_read=0", (now_iso(), user_id))
+
+
+def users_with_unread() -> list:
+    """همه‌ی کاربران واقعی و غیرمسدودی که اعلان خوانده‌نشده دارند + تعدادش."""
+    return q("SELECT n.user_id AS user_id, COUNT(*) AS c FROM notifications n "
+             "JOIN users u ON u.telegram_id = n.user_id "
+             "WHERE n.is_read=0 AND u.banned=0 AND u.is_test_user=0 "
+             "GROUP BY n.user_id ORDER BY n.user_id")
+
+
+def claim_digest(user_id: int, date_key: str, unread: int) -> bool:
+    """ادعای اتمیک «ارسال خلاصه‌ی امشب برای این کاربر» — فقط بار اول True.
+    حتی اگر جاب دوباره اجرا یا دوباره ثبت شود، هر کاربر هر شب حداکثر یک پیام می‌گیرد."""
+    with _lock:
+        cur = _conn.execute(
+            "INSERT OR IGNORE INTO notification_digest_log "
+            "(user_id, digest_date, unread_count, sent_at) VALUES (?,?,?,?)",
+            (user_id, date_key, unread, now_iso()))
+        _conn.commit()
+        return cur.rowcount == 1
+
+
+def digest_sent_count(date_key: str) -> int:
+    row = q1("SELECT COUNT(*) AS c FROM notification_digest_log WHERE digest_date=?",
+             (date_key,))
+    return row["c"] if row else 0
+
+
+def delete_read_notifications(older_than_days: int) -> int:
+    """پاک‌سازی اعلان‌های «خوانده‌شده»ی قدیمی — اعلان خوانده‌نشده هرگز حذف نمی‌شود."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(0, older_than_days))).isoformat(timespec="seconds")
+    return x("DELETE FROM notifications WHERE is_read=1 AND created_at<?",
+             (cutoff,))
+
+
+def notif_stats() -> dict:
+    s = {"total": 0, "unread": 0}
+    row = q1("SELECT COUNT(*) AS c FROM notifications")
+    s["total"] = row["c"] if row else 0
+    row = q1("SELECT COUNT(*) AS c FROM notifications WHERE is_read=0")
+    s["unread"] = row["c"] if row else 0
+    s["by_type"] = {r["type"]: r["c"] for r in
+                    q("SELECT type, COUNT(*) AS c FROM notifications GROUP BY type")}
+    return s
+
+
+# ---------------- حریم خصوصی ----------------
+PRIVACY_DEFAULTS = {
+    "show_online": "1",      # نمایش وضعیت آنلاین من در کارت برای دیگران
+    "show_city": "1",        # نمایش شهر من در کارت برای دیگران
+    "discoverable": "1",     # قابل پیدا شدن با شناسه‌ی ناشناس
+    "allow_requests": "1",   # پذیرش درخواست چت از دیگران
+}
+PRIVACY_LABELS = {
+    "show_online": "نمایش وضعیت آنلاین من در پروفایل",
+    "show_city": "نمایش شهر من در پروفایل",
+    "discoverable": "قابل پیدا شدن با شناسه (جست‌وجوی کاربر)",
+    "allow_requests": "پذیرش درخواست چت از کاربران",
+}
+
+
+def get_privacy(user_id: int) -> dict:
+    """تنظیمات حریم خصوصی کاربر؛ همیشه با پیش‌فرض‌ها پُر می‌شود."""
+    pr = dict(PRIVACY_DEFAULTS)
+    u = get_user(user_id)
+    if u and u.get("privacy"):
+        try:
+            saved = json.loads(u["privacy"])
+            if isinstance(saved, dict):
+                for k in pr:
+                    if k in saved:
+                        pr[k] = "1" if str(saved[k]) in ("1", "true", "yes", "on") else "0"
+        except (ValueError, TypeError):
+            pass
+    return pr
+
+
+def set_privacy_flag(user_id: int, key: str, value: str) -> None:
+    if key not in PRIVACY_DEFAULTS:
+        return
+    pr = get_privacy(user_id)
+    pr[key] = "1" if str(value) in ("1", "true", "yes", "on") else "0"
+    x("UPDATE users SET privacy=? WHERE telegram_id=?",
+      (json.dumps(pr, ensure_ascii=False), user_id))
+
+
+# ---------------- لاگ رویدادهای مهم (برای پنل ادمین) ----------------
+def log_event(kind: str, detail: str = "") -> None:
+    try:
+        x("INSERT INTO event_log (ts, kind, detail) VALUES (?,?,?)",
+          (now_iso(), kind, detail[:400]))
+        # نگه‌داشتن حداکثر ۳۰۰ ردیف آخر
+        x("DELETE FROM event_log WHERE id <= "
+          "(SELECT COALESCE(MAX(id),0) FROM event_log) - 300")
+    except Exception:
+        pass
+
+
+def recent_events(limit=15) -> list:
+    return q("SELECT * FROM event_log ORDER BY id DESC LIMIT ?", (limit,))

@@ -49,6 +49,11 @@ async def _show_target(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if target["banned"]:
         await update.message.reply_text("❌ این حساب در دسترس نیست.")
         return
+    # 🔐 حریم خصوصی: کاربر می‌تواند جست‌وجو با شناسه را ببندد
+    tpr = db.get_privacy(target["telegram_id"])
+    if tpr.get("discoverable") != "1":
+        await update.message.reply_text("❌ این کاربر جست‌وجو را بسته است.")
+        return
     if db.get_active_chat(target["telegram_id"]):
         await update.message.reply_text(
             "💬 این کاربر الان در چت دیگری است؛ کمی بعد دوباره امتحان کن.")
@@ -109,6 +114,8 @@ async def _accept_request(context, rid: int, auto=False) -> bool:
         return False
     if not db.set_request_status(rid, "ACCEPTED"):
         return False
+    from services import notifications as NF
+    NF.ev_chat_accepted(from_uid, rid)
     # اگر هر یک در صف جست‌وجو بود، هزینه‌اش برگردد
     for u in (sender, target):
         if u["state"] == config.ST_SEARCHING and not u["is_test_user"]:
@@ -161,6 +168,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         if not target or target["telegram_id"] == uid or target["banned"]:
             await q.answer("در دسترس نیست!")
             return
+        # 🔐 حریم خصوصی: پذیرش درخواست چت
+        tpr = db.get_privacy(tid)
+        if tpr.get("allow_requests") != "1":
+            await q.answer("این کاربر در حال حاضر درخواست چت نمی‌پذیرد.", show_alert=True)
+            return
         if db.get_active_chat(tid) or db.get_active_chat(uid):
             await q.answer("یکی از دو طرف در چت است.")
             return
@@ -168,6 +180,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         if rid is None:
             await q.answer("درخواست قبلی هنوز در انتظار است.")
             return
+        from services import notifications as NF
+        NF.ev_chat_request(tid, rid, sender)
         await q.answer("درخواست ارسال شد ✅")
         card = H.user_card(sender, show_contact_hint=True)
         if sender["avatar_file_id"]:
@@ -208,6 +222,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
             return
         # رد
         db.set_request_status(rid, "DECLINED")
+        from services import notifications as NF
+        NF.ev_chat_declined(req["from_uid"], rid)
         await q.answer("رد شد.")
         try:
             await q.message.edit_reply_markup()

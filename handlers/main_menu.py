@@ -5,8 +5,9 @@ from telegram.ext import ContextTypes
 import config
 import database as db
 from keyboards import (BTN_ANON_CHAT, BTN_COINS, BTN_FEEDBACK, BTN_HELP,
-                       BTN_PROFILE, BTN_REFERRAL, BTN_SEARCH_USER, coins_kb,
-                       main_menu_kb, match_menu_kb, profile_kb, remove_kb)
+                       BTN_NOTIFICATIONS, BTN_PRIVACY, BTN_PROFILE,
+                       BTN_REFERRAL, BTN_SEARCH_USER, coins_kb, main_menu_kb,
+                       match_menu_kb, profile_kb, remove_kb)
 from services import settings as S
 from utils import helpers as H
 
@@ -79,6 +80,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await send_help(update, context)
         return
 
+    if text == BTN_NOTIFICATIONS:
+        from handlers import notifications as NC
+        uid2 = user["telegram_id"]
+        total = db.notif_count(uid2)
+        unread = db.unread_count(uid2)
+        if total == 0:
+            await update.message.reply_text(
+                "🔔 <b>مرکز اعلان‌ها</b>\n\nفعلاً اعلانی نداری 🌙\n"
+                "از این به بعد هر رویداد مهم اینجا جمع می‌شود و هر شب اگر "
+                "اعلان خوانده‌نشده داشته باشی بهت خبر می‌دهیم.",
+                parse_mode="HTML",
+                reply_markup=NC._center_kb(uid2, 0))
+        else:
+            await update.message.reply_text(
+                f"🔔 <b>مرکز اعلان‌ها</b>\n\n"
+                f"🔴 خوانده‌نشده: <b>{unread}</b> | 📋 کل: <b>{total}</b>\n"
+                "روی هر اعلان بزن تا باز شود:",
+                parse_mode="HTML", reply_markup=NC._center_kb(uid2, 0))
+        return
+
+    if text == BTN_PRIVACY:
+        from handlers import privacy as P
+        db.set_state(uid, config.ST_MAIN)
+        await update.message.reply_text(P.PRIVACY_TEXT, parse_mode="HTML",
+                                        reply_markup=P.privacy_kb(uid))
+        return
+
     await update.message.reply_text("از دکمه‌های منو استفاده کن 👇",
                                     reply_markup=main_menu_kb())
 
@@ -99,7 +127,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: 
     if not user:
         return
     db.set_state(uid, config.ST_MAIN)
-    card = H.user_card(user, show_coins=True)
+    card = H.user_card(user, show_coins=True, viewer_is_self=True)
     if user["avatar_file_id"]:
         try:
             await context.bot.send_photo(chat_id=uid, photo=user["avatar_file_id"],
@@ -210,7 +238,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
 
 async def show_profile_cb(q, uid: int) -> None:
     user = db.get_user(uid)
-    card = H.user_card(user, show_coins=True)
+    card = H.user_card(user, show_coins=True, viewer_is_self=True)
     try:
         if user["avatar_file_id"]:
             await q.message.reply_photo(photo=user["avatar_file_id"], caption=card,

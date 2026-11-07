@@ -83,6 +83,10 @@ def main() -> None:
            .post_init(post_init)
            .build())
 
+    # زمان‌بند: خلاصه‌ی شبانه‌ی اعلان‌ها (۰۰:۰۰ تهران، هر کاربر حداکثر یک‌بار در شب)
+    from services import notifications as NF
+    NF.schedule_digest(app.job_queue)
+
     # دستورات
     app.add_handler(CommandHandler("start", common.cmd_start))
     app.add_handler(CommandHandler(["cancel", "menu"], common.cmd_cancel))
@@ -104,6 +108,7 @@ def main() -> None:
     app.add_error_handler(common.error_handler)
 
     log.info("bagoodit starting polling…")
+    db.log_event("startup", f"digest={'on' if NF.digest_schedule_info() else ''}")
     app.run_polling(drop_pending_updates=False, allowed_updates=None)
 
 

@@ -39,6 +39,12 @@ ST_ADMIN_FB = "ADMIN_FB_REPLY"
 ST_ADMIN_BC = "ADMIN_BROADCAST"
 ST_ADMIN_SET = "ADMIN_SET_VALUE"
 
+# ================= منطقه‌ی زمانی و خلاصه‌ی شبانه =================
+TIMEZONE_NAME = (os.getenv("TIMEZONE") or "Asia/Tehran").strip()
+DIGEST_SEND_SLEEP = float(os.getenv("DIGEST_SEND_SLEEP", "0.05"))  # فاصله‌ی ارسال‌ها (کنترل سیل)
+NOTIF_PAGE_SIZE = 8          # تعداد اعلان در هر صفحه‌ی مرکز اعلان‌ها
+NOTIF_BUTTON_TITLE_MAX = 20  # حداکثر طول عنوان اعلان روی دکمه
+
 # ================= محدودیت‌ها =================
 AGE_MIN, AGE_MAX = 18, 79
 NICK_MIN, NICK_MAX = 2, 30
@@ -62,7 +68,7 @@ TEST_MODE_ENABLED = (os.getenv("TEST_MODE_ENABLED", "false").strip().lower()
                      in ("1", "true", "yes", "on"))
 TEST_MODE_DAYS = int(os.getenv("TEST_MODE_DAYS", "7"))
 TEST_USERS_PER_CITY_F = int(os.getenv("TEST_USERS_PER_CITY_F", "20"))
-TEST_USERS_PER_CITY_M = int(os.getenv("TEST_USERS_PER_CITY_M", "17"))
+TEST_USERS_PER_CITY_M = int(os.getenv("TEST_USERS_PER_CITY_M", "20"))
 TEST_USER_MAX_REPLIES = int(os.getenv("TEST_USER_MAX_REPLIES", "10"))
 TEST_REPLY_MIN_DELAY = float(os.getenv("TEST_REPLY_MIN_DELAY", "3"))
 TEST_REPLY_MAX_DELAY = float(os.getenv("TEST_REPLY_MAX_DELAY", "10"))

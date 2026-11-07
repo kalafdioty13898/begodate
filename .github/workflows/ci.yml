@@ -41,3 +41,6 @@ jobs:
 
       - name: Full audit suite (۱۱۵ چک)
         run: python tests/test_audit_suite.py
+
+      - name: Notification & privacy suite
+        run: python tests/test_notification_suite.py

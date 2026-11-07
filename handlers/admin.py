@@ -43,6 +43,10 @@ def _panel_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton("📣 پیام همگانی", callback_data="adm:broadcast")],
         [InlineKeyboardButton("🧪 کاربران تستی", callback_data="adm:test"),
          InlineKeyboardButton("⚙️ تنظیمات", callback_data="adm:settings")],
+        [InlineKeyboardButton("🔔 اعلان‌ها", callback_data="adm:notif"),
+         InlineKeyboardButton("🖥 وضعیت سیستم", callback_data="adm:sysstatus")],
+        [InlineKeyboardButton("🏙 شهرها", callback_data="adm:cities"),
+         InlineKeyboardButton("📋 رویدادها", callback_data="adm:logs")],
     ])
 
 
@@ -235,6 +239,93 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) 
         await q.answer()
         await q.message.reply_text(_settings_text(), parse_mode="HTML",
                                    reply_markup=_settings_kb())
+        return
+
+    # ---------- بخش اعلان‌ها ----------
+    if data == "adm:notif":
+        await q.answer()
+        await q.message.reply_text(_notif_text(), parse_mode="HTML",
+                                   reply_markup=_notif_kb())
+        return
+
+    if data == "adm:ndigest":  # اجرای دستی خلاصه‌ی شبانه (برای تست/نیار فوری)
+        await q.answer("در حال اجرا…")
+        from services import notifications as NF
+        await NF.nightly_digest_job(context)
+        await q.message.reply_text(
+            "✅ اجرای خلاصه‌ی شبانه تمام شد.\n" + _notif_text(), parse_mode="HTML",
+            reply_markup=_notif_kb())
+        return
+
+    if data == "adm:nclean":
+        await q.answer()
+        await q.message.reply_text(
+            "⚠️ اعلان‌های «خوانده‌شده»ی قدیمی‌تر از ۷ روز حذف شوند؟\n"
+            "(اعلان‌های خوانده‌نشده هرگز حذف نمی‌شوند)", parse_mode="HTML",
+            reply_markup=confirm_kb("adm:ncleanyes", "adm:notif", "🗑 بله", "❌ انصراف"))
+        return
+
+    if data == "adm:ncleanyes":
+        n = await asyncio.to_thread(db.delete_read_notifications, 7)
+        db.log_event("notif_clean", f"deleted={n} by={uid}")
+        await q.answer(f"🗑 {n} اعلان خوانده‌شده‌ی قدیمی حذف شد.")
+        return
+
+    if data == "adm:nself":  # اعلان آزمایشی برای ادمین (ابزار تست)
+        await q.answer()
+        nid = db.add_notification(
+            uid, "system", "اعلان آزمایشی 🧪",
+            "این یک اعلان آزمایشی است؛ برای دیدن مرکز اعلان‌ها از دکمه‌ی زیر یا "
+            "دکمه‌ی 🔔 اعلان‌ها در منوی اصلی استفاده کن.",
+            action_type="balance", dedup_key=f"selftest:{db.now_iso()}")
+        await q.message.reply_text(
+            f"🧪 اعلان آزمایشی #{nid} ثبت شد؛ از منوی اصلی «🔔 اعلان‌ها» را بزن.")
+        return
+
+    if data == "adm:sysstatus":
+        await q.answer()
+        jq = getattr(context, "job_queue", None)
+        getter = getattr(jq, "get_jobs_by_name", None) if jq else None
+        jobs = []
+        getter = getattr(getattr(context, "job_queue", None), "get_jobs_by_name", None)
+        for j in (getter("nightly_digest") or []) if getter else []:
+            jobs.append(getattr(j, "name", None)
+                        or (j[2] if isinstance(j, tuple) and len(j) > 2 else str(j)))
+        await q.message.reply_text(_sysstatus_text(jobs), parse_mode="HTML")
+        return
+
+    if data == "adm:cities":
+        await q.answer()
+        await q.message.reply_text(_cities_text(), parse_mode="HTML")
+        return
+
+    if data == "adm:citycheck":
+        await q.answer("در حال بررسی…")
+        await q.message.reply_text(_citycheck_text(), parse_mode="HTML")
+        return
+
+    if data == "adm:logs":
+        await q.answer()
+        await q.message.reply_text(_logs_text(), parse_mode="HTML")
+        return
+
+    if parts[1] == "notifu" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        await q.answer()
+        await q.message.reply_text(_user_notif_text(tid), parse_mode="HTML",
+                                   reply_markup=_user_notif_kb(tid))
+        return
+
+    if parts[1] == "nreadall" and len(parts) == 3:
+        tid = _to_int(parts[2])
+        if tid is None:
+            await q.answer("نامعتبر!")
+            return
+        n = db.mark_all_notifications_read(tid)
+        await q.answer(f"✅ {n} اعلان این کاربر خوانده شد.")
         return
 
     if parts[1] == "set" and len(parts) == 3:
@@ -561,6 +652,109 @@ def _settings_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(kb)
 
 
+# ================= اعلان‌ها / وضعیت سیستم / شهرها / رویدادها =================
+def _notif_text() -> str:
+    ns = db.notif_stats()
+    last = db.q1("SELECT digest_date, COUNT(*) AS c FROM notification_digest_log "
+                 "GROUP BY digest_date ORDER BY digest_date DESC LIMIT 1")
+    lines = ["🔔 <b>مدیریت اعلان‌ها</b>\n",
+             f"کل اعلان‌ها: {ns['total']} | خوانده‌نشده: {ns['unread']}"]
+    if ns["by_type"]:
+        lines.append("تفکیک نوع:")
+        for t, c in sorted(ns["by_type"].items(), key=lambda x: -x[1]):
+            lines.append(f"  • {t}: {c}")
+    if last:
+        lines.append(f"\nآخرین خلاصه‌ی شبانه: {last['digest_date']} ({last['c']} نفر)")
+    else:
+        lines.append("\nهنوز خلاصه‌ی شبانه‌ای ارسال نشده.")
+    return "\n".join(lines)
+
+
+def _notif_kb() -> InlineKeyboardMarkup:
+    from services import notifications as NF
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🌙 خلاصه‌ی شبانه: {NF.digest_schedule_info()}",
+                              callback_data="adm:noop")],
+        [InlineKeyboardButton("📤 اجرای خلاصه‌ی شبانه (الان)", callback_data="adm:ndigest")],
+        [InlineKeyboardButton("🧪 اعلان آزمایشی به من", callback_data="adm:nself")],
+        [InlineKeyboardButton("🧹 پاک‌سازی خوانده‌شده‌های قدیمی", callback_data="adm:nclean")],
+        [InlineKeyboardButton("⬅️ پنل", callback_data="adm:back")],
+    ])
+
+
+def _sysstatus_text(jobs: list) -> str:
+    s = db.stats()
+    ns = db.notif_stats()
+    return ("🖥 <b>وضعیت سیستم</b>\n\n"
+            f"👥 کاربران: {s['users_total']} (واقعی {s['users_real']} | تستی {s['users_test']})\n"
+            f"💬 چت فعال: {s['chats_active']} | 📡 صف: {s['queue']}\n"
+            f"🔔 اعلان‌ها: {ns['total']} کل | {ns['unread']} خوانده‌نشده\n"
+            "🕐 جاب‌های زمان‌بندی: "
+            + (", ".join(jobs) if jobs else "هیچ") + "\n"
+            f"🗄 دیتابیس: <code>{config.DB_PATH}</code>")
+
+
+def _cities_text() -> str:
+    import locations
+    total_cities = sum(len(c) for _, c in locations.PROVINCES)
+    lines = [f"🏙 <b>شهرها</b> — {len(locations.PROVINCES)} استان، {total_cities} شهر\n"]
+    # پنج استان با بیشترین کاربران تستی به‌عنوان نمونه‌ی سلامت داده
+    rows = db.q("SELECT province, COUNT(*) AS c FROM users WHERE is_test_user=1 "
+                "GROUP BY province ORDER BY c DESC LIMIT 5")
+    if rows:
+        lines.append("استان‌های دارای کاربر تستی (۵ تای اول):")
+        for r in rows:
+            lines.append(f"  • {r['province']}: {r['c']}")
+    lines.append("\nبرای بررسی سلامت داده (شهر نامعتبر) دکمه‌ی زیر را بزن.")
+    return "\n".join(lines)
+
+
+def _citycheck_text() -> str:
+    import locations
+    valid = {c for _, cities in locations.PROVINCES for c in cities}
+    bad = db.q("SELECT telegram_id, city FROM users WHERE city IS NOT NULL AND city != ''")
+    invalid = [r for r in bad if r["city"] not in valid]
+    if not invalid:
+        return "✅ همه‌ی شهرهای ثبت‌شده در دیتابیس معتبرند (مطابق فهرست بگودیت)."
+    lines = [f"⚠️ {len(invalid)} کاربر با شهر نامعتبر:"]
+    for r in invalid[:15]:
+        lines.append(f"  • <code>{r['telegram_id']}</code>: {r['city']}")
+    return "\n".join(lines)
+
+
+def _logs_text() -> str:
+    rows = db.recent_events(15)
+    if not rows:
+        return "📋 رویداد مهمی ثبت نشده است."
+    lines = ["📋 <b>آخرین رویدادهای مهم</b>\n"]
+    for r in rows:
+        ts = (r["ts"] or "")[:16].replace("T", " ")
+        lines.append(f"• {ts} | {r['kind']} | {r['detail'] or ''}")
+    return "\n".join(lines)
+
+
+def _user_notif_text(tid: int) -> str:
+    total = db.notif_count(tid)
+    unread = db.unread_count(tid)
+    rows = db.list_notifications(tid, limit=10)
+    lines = [f"🔔 <b>اعلان‌های کاربر</b>\n",
+             f"کل: {total} | خوانده‌نشده: {unread}\n"]
+    if not rows:
+        lines.append("هیچ اعلانی ندارد.")
+    for n in rows:
+        mark = "🔴" if not n["is_read"] else "✅"
+        lines.append(f"• {mark} #{n['id']} [{n['type']}] {n['title'][:30]}")
+    return "\n".join(lines)
+
+
+def _user_notif_kb(tid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ خواندن همه‌ی اعلان‌هایش", callback_data=f"adm:nreadall:{tid}")],
+        [InlineKeyboardButton("🔄 تازه‌سازی", callback_data=f"adm:notifu:{tid}")],
+        [InlineKeyboardButton("⬅️ پنل", callback_data="adm:back")],
+    ])
+
+
 # ================= متن‌های هندلر متن =================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
                       user: dict) -> None:
@@ -596,9 +790,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(f"✅ انجام شد. موجودی جدید: {bal} سکه")
         t = db.get_user(tid)
         if not t["is_test_user"]:
-            label = "اضافه" if mode == "add" else "کسر"
-            await H.notify(context.bot, tid,
-                           f"🪙 مدیریت {amount} سکه به حساب تو {label} کرد.\nموجودی جدید: {bal}")
+            from services import notifications as NF
+            if mode == "add":
+                NF.ev_coin_reward(tid, amount, "admin", bal)
+            else:
+                NF.ev_system(tid, "کسر سکه از حساب تو 🪙",
+                             f"مدیریت {amount} سکه از موجودی‌ات کم کرد.\nموجودی جدید: {bal} سکه")
         return
 
     if state == config.ST_ADMIN_MSG:
@@ -617,6 +814,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
         db.answer_feedback(fid, text)
         db.set_state(uid, config.ST_MAIN, {})
+        from services import notifications as NF
+        NF.ev_feedback_reply(fb["user_id"], fid)
+        db.log_event("feedback_reply", f"fb={fid} user={fb['user_id']}")
         ok = await H.notify(context.bot, fb["user_id"],
                             f"💬 <b>پاسخ مدیریت بگودیت به پیام تو:</b>\n\n{H.esc(text)}")
         await update.message.reply_text("✅ پاسخ ارسال شد." if ok else "❌ ارسال ناموفق.")
@@ -669,6 +869,7 @@ async def _show_user_admin(update, context, target: dict) -> None:
                  InlineKeyboardButton("💬 چت‌ها", callback_data=f"adm:chatsu:{target['telegram_id']}")])
     if target["is_test_user"]:
         btns.append([InlineKeyboardButton("🗑 حذف کاربر تستی", callback_data=f"adm:deltest:{target['telegram_id']}")])
+    btns.append([InlineKeyboardButton("🔔 اعلان‌های کاربر", callback_data=f"adm:notifu:{target['telegram_id']}")])
     btns.append([InlineKeyboardButton("⬅️ پنل", callback_data="adm:back")])
     db.set_state(uid, config.ST_MAIN, {})
     if target["avatar_file_id"]:
@@ -689,6 +890,11 @@ async def ban_user(context, tid: int, admin_uid=None) -> None:
     if not u or u["is_test_user"]:
         return
     db.update_user(tid, banned=1)
+    from services import notifications as NF
+    NF.ev_account(tid, "banned", "دسترسی‌ات مسدود شد 🚫",
+                  "تیم بگودیت حساب تو را مسدود کرد. اگر اشتباهی رخ داده، "
+                  "از طریق پشتیبانی اطلاع بده.")
+    db.log_event("ban", f"user={tid} by={admin_uid}")
     # خروج از صف + بازگشت سکه
     if u["state"] == config.ST_SEARCHING:
         from services import matching as M
@@ -714,6 +920,10 @@ async def unban_user(context, tid: int) -> None:
         return
     db.update_user(tid, banned=0)
     db.set_state(tid, config.ST_MAIN, {})
+    from services import notifications as NF
+    NF.ev_account(tid, "unbanned", "مسدودی‌ات رفع شد ✅",
+                  "به بگودیت خوش برگشتی! حساب تو دوباره فعال است.")
+    db.log_event("unban", f"user={tid}")
     await H.notify(context.bot, tid, "✅ مسدودی تو رفع شد؛ خوش برگشتی!",
                    reply_markup=main_menu_kb())
 

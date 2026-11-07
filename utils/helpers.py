@@ -5,6 +5,7 @@ import time
 from collections import defaultdict, deque
 
 import config
+import database as db
 
 log = logging.getLogger("bagoodit")
 
@@ -64,23 +65,55 @@ def online_label(state: str) -> str:
     return "🟢 آنلاین"
 
 
-def user_card(user: dict, show_coins=False, show_contact_hint=False) -> str:
-    """کارت عمومی پروفایل (HTML)."""
+def level_label(referrals: int) -> str:
+    """سطح نمایشی بر پایه‌ی دعوت‌های موفق (فقط نمایش داده‌ی موجود؛ بدون منطق جدید)."""
+    if referrals >= 7:
+        return "🥇 طلایی"
+    if referrals >= 3:
+        return "🥈 نقره‌ای"
+    if referrals >= 1:
+        return "🥉 برنزی"
+    return "تازه‌کار"
+
+
+def user_card(user: dict, show_coins=False, show_contact_hint=False,
+              viewer_is_self=False) -> str:
+    """کارت پروفایل — نمایشی خوانا و دسته‌بندی‌شده (HTML).
+
+    viewer_is_self=True یعنی صاحبِ خود پروفایل می‌بیند: وضعیت واقعی و سکه‌ها
+    نمایش داده می‌شود و تنظیمات حریم خصوصی روی کارتش اثری ندارد.
+    برای دیدِ دیگران، گزینه‌های حریم خصوصی کاربر اعمال می‌شود.
+    """
     if not user:
         return "کاربر یافت نشد."
+    uid = user["telegram_id"]
+    pr = db.get_privacy(uid)
     lines = [f"👤 <b>{esc(user['nickname'] or 'بدون نام')}</b>"]
     lines.append(f"🆔 شناسه ناشناس: <code>{esc(user['bot_user_id'] or '—')}</code>")
     if user["gender"]:
         lines.append(f"🚻 جنسیت: {gender_label(user['gender'])}")
     if user["age"]:
         lines.append(f"🎂 سن: {user['age']}")
-    if user["city"]:
-        lines.append(f"📍 {esc(user['city'])} — {esc(user['province'] or '')}")
-    lines.append(f"🟦 وضعیت: {online_label(user['state'])}")
+    # شهر — برای دیگران تابع تنظیم «نمایش شهر» است
+    if user["city"] and (viewer_is_self or pr.get("show_city") == "1"):
+        lines.append(f"📍 شهر: {esc(user['city'])} — {esc(user['province'] or '')}")
+    elif user["city"]:
+        lines.append("📍 شهر: 🌙 مخفی")
+    # وضعیت — برای دیگران تابع تنظیم «وضعیت آنلاین» است
+    if viewer_is_self or pr.get("show_online") == "1":
+        lines.append(f"🟢 وضعیت: {online_label(user['state'])}")
+    else:
+        lines.append("🟢 وضعیت: 🌙 مخفی")
+    # سطح نمایشی بر پایه‌ی دعوت‌های موفق موجود
+    try:
+        refs = db.referral_count(uid)
+    except Exception:
+        refs = 0
+    lines.append(f"⭐ سطح: {level_label(refs)}")
     if user["is_test_user"]:
         lines.append("🧪 <i>حساب تستی بگودیت</i>")
     if show_coins:
-        lines.append(f"🪙 موجودی: <b>{user['coins']}</b> سکه")
+        lines.append(f"🪙 سکه: <b>{user['coins']}</b>")
     if show_contact_hint:
         lines.append("\n💬 برای شروع چت، دکمه درخواست را بزن.")
     return "\n".join(lines)

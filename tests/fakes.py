@@ -88,6 +88,9 @@ class FakeJobQueue:
     def run_once(self, callback, when, data=None, name=None):
         self.jobs.append((callback, data or {}, name))
 
+    def get_jobs_by_name(self, name):
+        return [j for j in self.jobs if j[2] == name]
+
     async def run_all(self):
         """اجرای همه jobهای ثبت‌شده به ترتیب (شبیه‌سازی PTB JobQueue).
         context جاب هم .job و هم .bot دارد (مثل PTB واقعی)."""
